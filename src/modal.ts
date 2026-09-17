@@ -42,6 +42,8 @@ export interface TextPopupSource {
 	readonly sourcePath: string;
 	/** 惰性提取第 index 条的内容；越界或提取为空时返回 null。 */
 	read(index: number): TextPopupBody | null;
+	/** 会话结束时的清理（例如移除离屏宿主）；实现方可选。 */
+	dispose?(): void;
 }
 
 /**
@@ -111,6 +113,8 @@ export class TextPopupModal extends Modal {
 	onClose(): void {
 		this.component.unload();
 		this.contentEl.empty();
+		// 移除离屏宿主，不留游离节点
+		this.source.dispose?.();
 	}
 
 	/**
