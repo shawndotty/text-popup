@@ -63,7 +63,7 @@
 	display: flex;
 	min-height: 0;
 	overflow: auto;
-	padding: var(--size-4-8);
+	padding: var(--size-4-16);
 }
 
 .mod-text-popup .text-popup-text {
