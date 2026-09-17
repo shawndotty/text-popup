@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-text-popup",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "Use Popup Window to View Text",
 	"main": "main.js",
 	"type": "module",
