@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "obsidian-text-popup",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Use Popup Window to View Text",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
