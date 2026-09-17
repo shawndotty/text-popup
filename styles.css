@@ -123,17 +123,17 @@
 	pointer-events: none;
 }
 
-/* 代码块 / Callout：给它们一个 480px 的宽度下限，超过 480px 之后仍由内容决定宽度。
+/* 代码块 / Callout：给它们一个 640px 的宽度下限，超过 640px 之后仍由内容决定宽度。
    下限写在 .text-popup-text 上、而不是 <pre> / .callout 上：真正「收缩到内容」的是这个
    容器（flex 项 + margin: auto），给它下限才能让整屏内容一起变宽。
-   反过来给子元素设 min-width: 480px 会把父容器顶破 —— 窗口比 480px + 内边距还窄时
+   反过来给子元素设 min-width: 640px 会把父容器顶破 —— 窗口比 640px + 内边距还窄时
    内容区会横向滚动、Callout 还会被自己的 overflow: hidden 裁掉（实测 400px 窗口下
-   子元素 480px / 容器只有 272px）。
-   min(480px, 100%) 让窄窗口退化成「正好占满内容区」，窗口够宽时就是纯 480px 下限；
+   子元素 640px / 容器只有 272px）。
+   min(640px, 100%) 让窄窗口退化成「正好占满内容区」，窗口够宽时就是纯 640px 下限；
    :has() 只命中代码块与 Callout，数学块、普通段落、裸引用维持原来的按内容收缩。 */
 .mod-text-popup .text-popup-text.is-rich:has(pre),
 .mod-text-popup .text-popup-text.is-rich:has(.callout) {
-	min-width: min(480px, 100%);
+	min-width: min(640px, 100%);
 }
 
 /* 底部控制条：字号 / 缩放 / 恢复默认 */
