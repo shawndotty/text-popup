@@ -1,1 +1,1 @@
-- Add Arrow Key Control for Popup Window
+- fix pop text counting mistake
