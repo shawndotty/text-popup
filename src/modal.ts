@@ -24,6 +24,7 @@ function round1(value: number): number {
  * 文字放大弹窗。
  *
  * - 用 Obsidian 自带的 Modal，免费获得 Esc 关闭、点击遮罩关闭、关闭按钮与焦点陷阱。
+ * - 尺寸铺满 Obsidian 应用窗口（与内置图片 lightbox 同一思路），便于演示时凸显重点。
  * - 标题栏显示来源笔记名，便于溯源。
  * - 底部控制条提供字号与缩放；只影响本次弹窗，不写回设置。
  */
@@ -53,7 +54,11 @@ export class TextPopupModal extends Modal {
 		const foreground = this.settings.popupTextColor;
 		if (foreground) this.modalEl.style.setProperty('--text-popup-fg', foreground);
 
-		this.contentEl.createDiv({ cls: 'text-popup-content', text: this.text });
+		// 文字外面再包一层，方便用 margin: auto 在满屏窗口里居中：
+		// 内容短时居中显示，内容长时仍可从头滚动。
+		const scrollEl = this.contentEl.createDiv({ cls: 'text-popup-content' });
+		scrollEl.createDiv({ cls: 'text-popup-text', text: this.text });
+
 		this.buildControls(this.contentEl);
 		this.updateSize();
 	}

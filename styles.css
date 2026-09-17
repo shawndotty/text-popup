@@ -9,29 +9,66 @@
 	cursor: var(--cursor);
 }
 
-/* 弹窗：默认跟随主题；设置项对应下面三个变量。
+/* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。 */
 
-.mod-text-popup {
+.mod-text-popup.modal {
 	--text-popup-bg: var(--background-primary);
 	--text-popup-fg: var(--text-normal);
 	--text-popup-font-size: 16px;
 	--modal-background: var(--text-popup-bg);
 	color: var(--text-popup-fg);
+
+	/* 核心 .modal 默认 width: var(--dialog-width)、max-width: var(--dialog-max-width)、
+	   max-height: var(--dialog-max-height)（560px / 80vw / 85vh），所以只是个居中对话框。
+	   这里把宽高全部放开，改为撑满自己的定位上下文 .modal-container——它是
+	   position: absolute + top/bottom: 0 + width: 100%，即 Obsidian 应用窗口本身。
+	   内置图片 lightbox 走的是同一套基准（.modal.mod-image-lightbox 用 90vw/90vh）。 */
+	width: 100%;
+	height: 100%;
+	max-width: 100%;
+	max-height: 100%;
+	min-height: 0;
+	padding: 0;
+	border: none;
+	border-radius: 0;
+	overflow: hidden;
+}
+
+/* 标题栏：只占自身高度，不参与内容区的空间分配 */
+.mod-text-popup .modal-header {
+	flex: 0 0 auto;
+	margin-bottom: 0;
+	padding: var(--size-4-3) var(--size-4-4);
+	/* 右侧留出关闭按钮的位置，笔记名过长时不会钻到按钮下面 */
+	padding-inline-end: var(--size-4-12);
+	border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .mod-text-popup .modal-content {
+	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+	overflow: hidden;
+	padding: 0;
 }
+
+/* 内容区：吃掉标题栏与控制条之间的全部空间。
+   文字用 margin: auto 居中——内容短时居中，内容长时从头滚动（不裁顶）。 */
 
 .mod-text-popup .text-popup-content {
 	flex: 1 1 auto;
+	display: flex;
 	min-height: 0;
-	max-height: 60vh;
 	overflow: auto;
+	padding: var(--size-4-8);
+}
+
+.mod-text-popup .text-popup-text {
+	margin: auto;
+	max-width: 100%;
 	white-space: pre-wrap;
 	word-break: break-word;
 	font-size: var(--text-popup-font-size);
@@ -45,9 +82,9 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	flex: 0 0 auto;
 	gap: var(--size-4-3);
-	padding-top: var(--size-4-2);
-	margin-top: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-4);
 	border-top: 1px solid var(--background-modifier-border);
 }
 
