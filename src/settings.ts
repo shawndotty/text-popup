@@ -6,6 +6,8 @@ import { DEFAULT_TAGS, normalizeTagList } from './tags';
 export interface TextPopupSettings {
 	/** 是否在实时预览中显示放大图标。 */
 	enabled: boolean;
+	/** 弹窗内渲染块里的 HTML 与 Markdown；关闭则按纯文本显示。 */
+	renderRichText: boolean;
 	/** 弹窗背景色；空字符串表示跟随主题。 */
 	popupBackgroundColor: string;
 	/** 弹窗文字颜色；空字符串表示跟随主题。 */
@@ -18,6 +20,7 @@ export interface TextPopupSettings {
 
 export const DEFAULT_SETTINGS: TextPopupSettings = {
 	enabled: true,
+	renderRichText: true,
 	popupBackgroundColor: '',
 	popupTextColor: '',
 	popupFontSize: 16,
@@ -47,6 +50,10 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 	const data = (raw ?? {}) as Partial<TextPopupSettings>;
 	return {
 		enabled: typeof data.enabled === 'boolean' ? data.enabled : DEFAULT_SETTINGS.enabled,
+		renderRichText:
+			typeof data.renderRichText === 'boolean'
+				? data.renderRichText
+				: DEFAULT_SETTINGS.renderRichText,
 		popupBackgroundColor: readString(
 			data.popupBackgroundColor,
 			DEFAULT_SETTINGS.popupBackgroundColor,
@@ -77,6 +84,16 @@ export class TextPopupSettingTab extends PluginSettingTab {
 					this.plugin.settings.enabled = value;
 					await this.plugin.saveSettings();
 					refreshTextPopupActions(this.plugin);
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('渲染 HTML 与 Markdown')
+			.setDesc('在弹窗内按语法渲染块里的 HTML 与 Markdown。关闭后按纯文本原样显示。')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.renderRichText).onChange(async (value) => {
+					this.plugin.settings.renderRichText = value;
+					await this.plugin.saveSettings();
 				}),
 			);
 

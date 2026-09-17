@@ -72,16 +72,38 @@
 	padding: var(--size-4-16);
 }
 
+/* 内容容器：两种模式共用字号 / 颜色 / 居中 */
+
 .mod-text-popup .text-popup-text {
 	margin: auto;
 	max-width: 100%;
-	white-space: pre-wrap;
-	word-break: break-word;
 	/* 只有正文文字吃设置里的「弹窗文字颜色」，标题栏与控制条各用主题色 */
 	color: var(--text-popup-fg);
 	font-size: var(--text-popup-font-size);
 	line-height: var(--line-height-normal);
 	user-select: text;
+}
+
+/* 纯文本模式：保留原样换行 */
+.mod-text-popup .text-popup-text.is-plain {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* 富文本模式：交给核心 .markdown-rendered 排版。这里不能再用 pre-wrap，
+   否则块级元素之间会被源码换行撑出额外空行（最容易被误判成「渲染出错」）。 */
+.mod-text-popup .text-popup-text.is-rich {
+	white-space: normal;
+	overflow-wrap: break-word;
+}
+
+.mod-text-popup .text-popup-text.is-rich img {
+	max-width: 100%;
+}
+
+/* 弹窗不是真实文件行，任务列表复选框没有可回写的行号，禁掉交互避免误点 */
+.mod-text-popup .text-popup-text.is-rich input[type='checkbox'] {
+	pointer-events: none;
 }
 
 /* 底部控制条：字号 / 缩放 / 恢复默认 */

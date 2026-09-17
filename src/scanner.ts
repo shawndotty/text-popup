@@ -1,6 +1,6 @@
 import { debounce, Platform, setIcon } from 'obsidian';
 import type { App, EventRef } from 'obsidian';
-import { extractText } from './extract';
+import { extractRichSource, extractText } from './extract';
 import { TextPopupModal } from './modal';
 import type { TextPopupSettings } from './settings';
 import { findSupportedElement } from './tags';
@@ -86,10 +86,21 @@ function injectAction(blockEl: HTMLElement, host: TextPopupHost): void {
 	setIcon(actionEl, 'zoom-in');
 
 	const open = (): void => {
-		const text = extractText(target);
-		if (!text) return;
-		const sourceName = host.app.workspace.getActiveFile()?.basename ?? '';
-		new TextPopupModal(host.app, text, host.settings, sourceName).open();
+		const plain = extractText(target);
+		const rich = host.settings.renderRichText ? extractRichSource(target) : '';
+		if (!plain && !rich) return;
+		const file = host.app.workspace.getActiveFile();
+		new TextPopupModal(
+			host.app,
+			{
+				plain,
+				rich,
+				sourceName: file?.basename ?? '',
+				// 链接 / 嵌入的解析基准必须是完整路径，basename 会导致相对解析失败。
+				sourcePath: file?.path ?? '',
+			},
+			host.settings,
+		).open();
 	};
 
 	actionEl.addEventListener('click', open);

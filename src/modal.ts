@@ -1,4 +1,4 @@
-import { App, Modal, setIcon } from 'obsidian';
+import { App, Component, MarkdownRenderer, Modal, setIcon } from 'obsidian';
 import {
 	FONT_SIZE_MAX,
 	FONT_SIZE_MIN,
@@ -21,14 +21,33 @@ function round1(value: number): number {
 }
 
 /**
+ * 打开弹窗所需的全部入参，由 scanner 组装。
+ *
+ * 用单个对象承载四个相近的字符串（而不是四个平铺参数），避免调用处错位。
+ */
+export interface TextPopupPayload {
+	/** 纯文本内容（extractText），回退路径使用。 */
+	plain: string;
+	/** 富文本输入（extractRichSource），可能为空字符串。 */
+	rich: string;
+	/** 标题栏显示的笔记名。 */
+	sourceName: string;
+	/** 链接 / 嵌入的解析基准：笔记完整路径（TFile.path），不能用 basename。 */
+	sourcePath: string;
+}
+
+/**
  * 文字放大弹窗。
  *
  * - 用 Obsidian 自带的 Modal，免费获得 Esc 关闭、点击遮罩关闭、关闭按钮与焦点陷阱。
  * - 尺寸铺满 Obsidian 应用窗口（与内置图片 lightbox 同一思路），便于演示时凸显重点。
  * - 标题栏显示来源笔记名，便于溯源。
  * - 底部控制条提供字号与缩放；只影响本次弹窗，不写回设置。
+ * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
  */
 export class TextPopupModal extends Modal {
+	/** MarkdownRenderer 要求传入真实 Component，并在关闭时卸载，避免嵌入内容的事件监听泄漏。 */
+	private component = new Component();
 	private fontSize: number;
 	private zoom = DEFAULT_ZOOM;
 	private fontSizeValueEl: HTMLElement | null = null;
@@ -36,9 +55,8 @@ export class TextPopupModal extends Modal {
 
 	constructor(
 		app: App,
-		private text: string,
+		private payload: TextPopupPayload,
 		private settings: TextPopupSettings,
-		private sourceName: string,
 	) {
 		super(app);
 		this.fontSize = settings.popupFontSize;
@@ -46,7 +64,7 @@ export class TextPopupModal extends Modal {
 
 	onOpen(): void {
 		this.modalEl.addClass('mod-text-popup');
-		this.titleEl.setText(this.sourceName || '放大显示');
+		this.titleEl.setText(this.payload.sourceName || '放大显示');
 
 		// 空字符串表示跟随主题：此时不设变量，交给 styles.css 的默认值。
 		const background = this.settings.popupBackgroundColor;
@@ -54,17 +72,48 @@ export class TextPopupModal extends Modal {
 		const foreground = this.settings.popupTextColor;
 		if (foreground) this.modalEl.style.setProperty('--text-popup-fg', foreground);
 
+		// 必须在 render 之前 load：渲染出的子组件会挂在它下面。
+		this.component.load();
+
 		// 文字外面再包一层，方便用 margin: auto 在满屏窗口里居中：
 		// 内容短时居中显示，内容长时仍可从头滚动。
 		const scrollEl = this.contentEl.createDiv({ cls: 'text-popup-content' });
-		scrollEl.createDiv({ cls: 'text-popup-text', text: this.text });
+		const textEl = scrollEl.createDiv({ cls: 'text-popup-text' });
 
 		this.buildControls(this.contentEl);
 		this.updateSize();
+
+		void this.renderBody(textEl);
 	}
 
 	onClose(): void {
+		this.component.unload();
 		this.contentEl.empty();
+	}
+
+	/** 优先富文本渲染；产出为空或抛错时回退纯文本，保证弹窗永不空白。 */
+	private async renderBody(textEl: HTMLElement): Promise<void> {
+		if (this.settings.renderRichText && this.payload.rich) {
+			textEl.addClass('markdown-rendered', 'is-rich');
+			try {
+				// render 是 append 语义，这里容器刚建好为空，不存在重复追加。
+				await MarkdownRenderer.render(
+					this.app,
+					this.payload.rich,
+					textEl,
+					this.payload.sourcePath,
+					this.component,
+				);
+				// 判据用「有文本 或 有子元素」，覆盖「只渲染出一张图片、没有文字」的情况。
+				if (textEl.textContent?.trim() || textEl.childElementCount > 0) return;
+			} catch (error) {
+				console.error('[text-popup] 富文本渲染失败，已回退为纯文本', error);
+			}
+			textEl.empty();
+			textEl.removeClass('markdown-rendered', 'is-rich');
+		}
+		textEl.addClass('is-plain');
+		textEl.setText(this.payload.plain);
 	}
 
 	private buildControls(parentEl: HTMLElement): void {
