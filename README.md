@@ -1,92 +1,79 @@
-# Obsidian Sample Plugin
+# Text Popup
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+把笔记里**手写 HTML 标记的段落**单独放大到弹窗里阅读，交互与 Obsidian 内置的图片放大（lightbox）一致。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## 用法
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+在笔记中用块级 HTML 标签把想放大的内容包起来：
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
-
-## First time developing plugins?
-
-Quick starting guide for new plugin devs:
-
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
-
-## Releasing new releases
-
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
-
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
-}
+```html
+<div>
+这是要放大的第一行
+这是要放大的第二行
+</div>
 ```
 
-If you have multiple URLs, you can also do:
+在**实时预览**中把鼠标移到这个块上，右上角会出现两个图标：
 
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
+```
+[🔍] [</>]
+放大  编辑这个模块
 ```
 
-## API Documentation
+点击左边的放大图标，弹窗即显示该块内的文字。
 
-See https://docs.obsidian.md
+- 用 `Esc`、点击弹窗外的遮罩、或点击弹窗右上角的关闭按钮都可以关闭。
+- 弹窗底部有控制条，可临时调整**字号**与**缩放**，以及一键**恢复默认**。
+
+## 支持的标签
+
+默认支持 `div` 与 `p`。可以在 **设置 → Text Popup → 支持的标签** 中修改（用逗号分隔，例如 `div, p, section`），改完立即生效，不需要改代码、也不需要重启插件。
+
+判定规则：只有**块级原始 HTML** 才有放大图标。也就是说，只有你自己手写的 HTML 块会被识别；Markdown 语法（普通段落、标题、列表）生成的元素不会被误伤。
+
+## 设置项
+
+| 设置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| 启用放大图标 | 开 | 关闭后所有放大图标消失，重新打开即恢复 |
+| 弹窗背景色 | 跟随主题 | 可点「跟随主题」清空 |
+| 弹窗文字颜色 | 跟随主题 | 可点「跟随主题」清空 |
+| 弹窗字号 | 16 px | 12–32，弹窗内可临时调整 |
+| 支持的标签 | `div, p` | 用逗号分隔 |
+
+## 已知限制
+
+- **只支持实时预览**：阅读视图没有「编辑这个模块」图标，且原始 HTML 与 Markdown 生成的 `<p>` 在 DOM 上无法靠类名区分，因此 V1 不做阅读视图。
+- **不支持移动端**：移动端没有悬停，Obsidian 内置的图片放大图标同样不含移动端，V1 跟随该行为。
+- **HTML 块内的 Markdown 不会被解析**：Obsidian 本身就不解析 HTML 块内的 Markdown，因此块内的 `**粗体**`、`- 列表` 等语法在弹窗里会以原文出现。
+- **块内只有一张图片时**，本插件仍会弹出文字弹窗（而非图片 lightbox）。
+- 弹窗里的**缩放是按比例作用于字号**的（50%–200%），这样内容会自然重排，不会被裁切。
+
+## 开发
+
+```bash
+npm install
+npm run dev     # 监听编译
+npm run build   # 类型检查 + 生产构建
+npm run lint    # ESLint（含 obsidianmd 规则）
+```
+
+产物为插件根目录的 `main.js`，与 `manifest.json`、`styles.css` 一起由 Obsidian 加载。
+
+### 代码结构
+
+```
+src/
+├── main.ts      # 生命周期：加载设置、挂设置页、注册扫描器
+├── settings.ts  # 设置接口 + 默认值 + 设置页 UI
+├── tags.ts      # 标签注册表（唯一需要改动的扩展点）
+├── scanner.ts   # 扫描块级 HTML 容器 + 幂等注入放大图标
+├── extract.ts   # 从块中提取纯文本
+└── modal.ts     # 放大弹窗（含字号 / 缩放控制条）
+```
+
+### 实现要点
+
+扫描锚点是 Obsidian 为**块级原始 HTML** 建立的专属容器 `.cm-html-embed.cm-embed-block`（可与 `obsidian.asar` 中的 `createEl(block ? "div" : "span", "cm-html-embed" + (block ? " cm-embed-block" : ""))` 对照）。放大图标插进核心自建的 `.embed-actions` 容器首位，因此自动获得「悬停显示、右上角定位、RTL 镜像」等核心行为，不需要自己写定位与显隐样式。
+
+这些都依赖 Obsidian 的内部类名（非公开 API），升级后若图标不出现，集中修改 `src/scanner.ts` 顶部的选择器常量即可。

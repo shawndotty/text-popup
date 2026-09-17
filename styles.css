@@ -1,8 +1,101 @@
-/*
+/* ==========================================================================
+   Text Popup
+   ========================================================================== */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+/* 放大图标：外观与悬停显隐完全复用核心的 .embed-action / .embed-actions，
+   这里只补一个手型光标。 */
 
-If your plugin does not need CSS, delete this file.
+.text-popup-action {
+	cursor: var(--cursor);
+}
 
-*/
+/* 弹窗：默认跟随主题；设置项对应下面三个变量。
+   覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
+   让标题栏与内容区同色，而不是只染内容区。 */
+
+.mod-text-popup {
+	--text-popup-bg: var(--background-primary);
+	--text-popup-fg: var(--text-normal);
+	--text-popup-font-size: 16px;
+	--modal-background: var(--text-popup-bg);
+	color: var(--text-popup-fg);
+}
+
+.mod-text-popup .modal-content {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.mod-text-popup .text-popup-content {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: 60vh;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: var(--text-popup-font-size);
+	line-height: var(--line-height-normal);
+	user-select: text;
+}
+
+/* 底部控制条：字号 / 缩放 / 恢复默认 */
+
+.mod-text-popup .text-popup-controls {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-4-3);
+	padding-top: var(--size-4-2);
+	margin-top: var(--size-4-2);
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.mod-text-popup .text-popup-control-group {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+}
+
+.mod-text-popup .text-popup-control-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.mod-text-popup .text-popup-control-value {
+	min-width: 3.5em;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+
+.mod-text-popup .text-popup-control-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--size-4-6, 24px);
+	height: var(--size-4-6, 24px);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	cursor: var(--cursor);
+}
+
+.mod-text-popup .text-popup-control-button:hover,
+.mod-text-popup .text-popup-control-button:focus-visible {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.mod-text-popup .text-popup-control-button .svg-icon {
+	width: var(--icon-s, 16px);
+	height: var(--icon-s, 16px);
+}
+
+/* 设置页：颜色项旁的「当前值」提示 */
+
+.text-popup-setting-status {
+	margin-left: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
