@@ -22,3 +22,7 @@ data.json
 .DS_Store
 
 text-popup.zip
+
+# release credentials (deploy-release.mjs)
+.env
+.gitee-token
