@@ -25,12 +25,12 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 };
 
 export const FONT_SIZE_MIN = 12;
-export const FONT_SIZE_MAX = 32;
+export const FONT_SIZE_MAX = 72;
 export const FONT_SIZE_STEP = 1;
 
 /** 弹窗内缩放的上下限与步长（缩放是按比例作用于字号的）。 */
 export const ZOOM_MIN = 0.5;
-export const ZOOM_MAX = 2;
+export const ZOOM_MAX = 4;
 export const ZOOM_STEP = 0.1;
 
 function clampFontSize(value: unknown): number {
