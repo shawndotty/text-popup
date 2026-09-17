@@ -11,14 +11,15 @@
 
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
-   让标题栏与内容区同色，而不是只染内容区。 */
+   让标题栏与内容区同色，而不是只染内容区。
+   注意：这里只声明变量，不设 color。核心 .modal / .modal-title 都没有 color，
+   标题靠继承拿到主题色；一旦在弹窗根节点设 color，笔记名也会被一起染色。 */
 
 .mod-text-popup.modal {
 	--text-popup-bg: var(--background-primary);
 	--text-popup-fg: var(--text-normal);
 	--text-popup-font-size: 16px;
 	--modal-background: var(--text-popup-bg);
-	color: var(--text-popup-fg);
 
 	/* 核心 .modal 默认 width: var(--dialog-width)、max-width: var(--dialog-max-width)、
 	   max-height: var(--dialog-max-height)（560px / 80vw / 85vh），所以只是个居中对话框。
@@ -36,7 +37,8 @@
 	overflow: hidden;
 }
 
-/* 标题栏：只占自身高度，不参与内容区的空间分配 */
+/* 标题栏：只占自身高度，不参与内容区的空间分配。
+   笔记名固定用主题文字色，不受设置里的「弹窗文字颜色」影响。 */
 .mod-text-popup .modal-header {
 	flex: 0 0 auto;
 	margin-bottom: 0;
@@ -44,6 +46,10 @@
 	/* 右侧留出关闭按钮的位置，笔记名过长时不会钻到按钮下面 */
 	padding-inline-end: var(--size-4-12);
 	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mod-text-popup .modal-title {
+	color: var(--text-normal);
 }
 
 .mod-text-popup .modal-content {
@@ -71,6 +77,8 @@
 	max-width: 100%;
 	white-space: pre-wrap;
 	word-break: break-word;
+	/* 只有正文文字吃设置里的「弹窗文字颜色」，标题栏与控制条各用主题色 */
+	color: var(--text-popup-fg);
 	font-size: var(--text-popup-font-size);
 	line-height: var(--line-height-normal);
 	user-select: text;
