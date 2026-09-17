@@ -42,7 +42,10 @@ const answer = 42;
 $$ a+b = c $$
 ````
 
-在**实时预览**中把鼠标移到它们上面，右上角同样会出现两个图标：左边是本插件的放大图标，右边是 Obsidian 自带的「编辑这个模块」（`</>`）。
+在**实时预览**中把鼠标移到它们上面，右上角就会出现本插件的放大图标。图标长在哪个位置取决于区块类型：
+
+- **Callout / 数学块** → 出现**两个**图标：左边是本插件的放大图标，右边是 Obsidian 自带的「编辑这个模块」（`</>`）。
+- **代码块** → 放大图标在右上角的**语言名 / 复制 chip 里**（也就是 ```` ```typescript ```` 那个 chip），是 chip 里的第二个图标；只有语言被 `mermaid` / `base` 这类处理器接管时，才会像上面那样出现在 `</>` 左侧（此时这块由处理器渲染成图 / 数据库视图，不再是普通代码块）。
 
 弹窗里的显示效果与编辑器所见一致：
 
@@ -79,7 +82,9 @@ $$ a+b = c $$
 - **标题里的「总数」= 笔记里的可放大区块数，与滚动位置无关**：候选集来自**笔记文本**（不是当前屏幕上的图标），所以滚到任意位置、把光标停进任意块里、或分屏打开同一笔记，同一个笔记的总数始终一致。代价是**翻到视口外的块时编辑器不会跟着滚动**（弹窗是全屏模态，编辑器被遮住）；另外光标停在自己手写 HTML 块里时该块没有图标（这是 Obsidian 的既有行为），但它**仍在候选里**，可以从别的块用方向键翻到它。
 - **候选块由笔记文本扫出，规则与编辑器渲染可能略有出入**：HTML 块按 CommonMark 的 HTML 块规则（到第一个空行结束、4 空格缩进的 `<p>` 视作代码块不计入、`script` / `style` 一类标签不计入）；围栏代码块到闭围栏为止，Callout 到第一个非 `>` 行为止，`$$` 数学块到下一个 `$$` 为止。未闭合的围栏 / `$$` 会一直扫到文末，`$$$` 这类多 `$` 写法以第一个 `$$` 为界 —— 都是**稳定**的多一个或少一个，不会抖动。
 - **候选数会随笔记里的代码块数量明显变多**：方向键要在四类区块之间依次翻。这是「候选集 = 本笔记全部可放大区块」这条原则的必然结果，不打算为了少翻几屏而把「只在屏幕上的块」重新算进来。
-- **新增了 3 个内部类名依赖**：`.cm-preview-code-block`（代码块）、`.cm-callout`（Callout）、`.math-block`（数学块），与原有的 `.cm-html-embed` 同级，都是非公开 API，已对照 `obsidian.asar` 的 `app.js` 原文。Obsidian 升级后若图标不出现，集中修改 `src/scanner.ts` 的 `classifyBlock` 即可。
+- **内部类名依赖（全是非公开 API，已对照 `obsidian.asar` 的 `app.js` 原文）**：`.cm-embed-block` 及其分类用的 `.cm-html-embed` / `.cm-preview-code-block` / `.cm-callout` / `.math-block`、图标容器 `.embed-actions`、普通代码块右上角的 `.code-block-flair`、以及用来跳过引用块围栏的 `HyperMD-quote`。Obsidian 升级后若图标不出现，集中修改 `src/scanner.ts` 的 `classifyBlock` 与 `injectFlairAction` 即可。
+- **代码块有两种形态，图标位置因此不同**：语言被 `mermaid` / `query` / `base` 等 post-processor 接管时，核心把代码块建成 widget，图标在「编辑这个模块」`</>` 左侧；普通语言（如 `typescript`）核心**不建 widget**，只把代码留成源码行，并在开围栏行末尾挂一个 `.code-block-flair` chip 当右上角的语言名 / 点击复制，图标就嵌在这个 chip 里。**这也是为什么代码块的图标是常显的**（chip 本身常显，核心没给它做悬停显隐），而另外三类要悬停才出现。
+- **引用块里的围栏不加图标**：`> ```typescript ` 这种写法在扫描器里不算代码块区间（行首是 `>`），所以那里既不是候选、也不挂放大图标 —— 避免出现「点开却翻出别的区块」。同理，Callout 内部的代码块由 Callout 自己渲染，只按外层 Callout 计一条。
 - **围栏语言为 `base` 的代码块会按代码块处理**：核心也用 `.cm-preview-code-block` 建它的容器，并且 CSS 给它的控制图标条设了常显，所以它同样会有放大图标；这也是「有控制图标的区块才加放大图标」这条判据的自然结果。
 - **代码块的渲染走全局 post-processor**：`mermaid` / `dataview` / `base` 这类由其它处理器接管的语言，在弹窗里也走同一套处理器（例如 `mermaid` 会渲染成图）；需要文件 / 仓库上下文的处理器能否出结果取决于其自身实现，渲染失败时弹窗会自动回退为纯文本。
 - **HTML 块内的 Markdown 由本插件解析**：Obsidian 本身不解析 HTML 块内的 Markdown，弹窗里的解析由本插件用 `MarkdownRenderer` 完成，因此弹窗内与编辑器内的呈现可能不一致（编辑器里 `**粗体**` 仍是原文，弹窗里会渲染成粗体）。若想看到原文，关闭设置里的「渲染 HTML 与 Markdown」。
@@ -111,18 +116,22 @@ src/
 ├── settings.ts   # 设置接口 + 默认值 + 设置页 UI
 ├── tags.ts       # 标签注册表（手写 HTML 块的标签闸门）
 ├── blocks.ts     # 按笔记文本扫出四类可放大区间（候选集的事实来源）
-├── scanner.ts    # 扫描 .cm-embed-block 并分类 + 幂等注入放大图标 + 组装方向键切换的候选来源
+├── scanner.ts    # 扫描 .cm-embed-block 与 .code-block-flair 两处锚点 + 幂等注入放大图标 + 组装方向键切换的候选来源
 ├── extract.ts    # 提取纯文本（回退）与富文本渲染输入（去注入节点 / 去缩进）
 ├── modal.ts      # 放大弹窗（候选切换 + 富文本渲染 + 回退 + 字号 / 缩放控制条）
 ```
 
 ### 实现要点
 
-**四类区块共用同一套注入机制。** 在 Live Preview 里，块级原始 HTML、围栏代码块、Callout、数学块都是核心的 CM6 widget，容器都带 `.cm-embed-block`，都在容器内建 `.embed-actions` 放控制图标（可与 `obsidian.asar` 的 `app.js` 原文对照：`createEl("div", "cm-html-embed cm-embed-block")`、`createDiv("cm-preview-code-block cm-embed-block …")`、`createDiv("cm-embed-block cm-callout")`、`toggleClass("math-block" / "cm-embed-block")`）。放大图标插进 `.embed-actions` 首位，因此自动获得「悬停显示、右上角定位、RTL 镜像」等核心行为，不需要自己写定位与显隐样式，`styles.css` 与 `modal.ts` 都无需改动。
+**候选集是同一套，注入点有两处。**
 
-扫描是**一次 `.cm-embed-block` 遍历 + 类名分类**（`classifyBlock`），表格（`.cm-table-widget`）等不带这四类类名的区块直接跳过。
+- **widget 类区块**（块级原始 HTML、Callout、数学块，以及被 `mermaid` / `base` 等 post-processor 接管的代码块）：容器都带 `.cm-embed-block`，都在容器内建 `.embed-actions` 放控制图标（可与 `obsidian.asar` 的 `app.js` 原文对照：`createEl("div", "cm-html-embed cm-embed-block")`、`createDiv("cm-preview-code-block cm-embed-block …")`、`createDiv("cm-embed-block cm-callout")`、`toggleClass("math-block" / "cm-embed-block")`）。放大图标插进 `.embed-actions` 首位，因此自动获得「悬停显示、右上角定位、RTL 镜像」等核心行为，不需要自己写定位与显隐样式。
+- **普通围栏代码块**（语言不是 `mermaid` / `query` / 有 post-processor 的）：`P3.canRenderLang(lang)` 为假，核心**不建 widget**，只把代码留成源码行（`HyperMD-codeblock`），并在开围栏行末尾挂一个 widget `E3` —— 它的 `toDOM` 就是 `createSpan({ cls: "code-block-flair" })`，即右上角的语言名 / 点击复制 chip。它没有 `.embed-actions`，所以放大图标作为 chip 的**子节点**嵌进去（`styles.css` 的 `.text-popup-flair-action` 负责摆成行内）。
+  为什么嵌进 chip 而不是当兄弟节点插到 `.cm-line` 上：CM6 的 DOMObserver 会**忽略 widget 内部的** DOM 变更（`readMutation` 里命中 widget tile 直接返回 null），而往 `.cm-line` 里塞一个它不认识的节点会被算成一次 DOM 变更、把整行标脏重渲染 —— 那会反复把按钮冲掉。
 
-这些都依赖 Obsidian 的内部类名（非公开 API），升级后若图标不出现，集中修改 `src/scanner.ts` 的 `classifyBlock` 即可。
+扫描是**一次 `.cm-embed-block` 遍历 + 类名分类**（`classifyBlock`），表格（`.cm-table-widget`）等不带这四类类名的区块直接跳过；另有一次 `.code-block-flair` 遍历，只吃「放大代码块」这一个开关。
+
+这些都依赖 Obsidian 的内部类名（非公开 API），升级后若图标不出现，集中修改 `src/scanner.ts` 的 `classifyBlock` 与 `injectFlairAction` 即可。
 
 富文本渲染走**公开 API** `MarkdownRenderer.render(app, markdown, el, sourcePath, component)`：
 

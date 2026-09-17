@@ -9,6 +9,23 @@
 	cursor: var(--cursor);
 }
 
+/* 代码块右上角的「语言名 / 复制」chip（核心 .code-block-flair）里没有 .embed-actions 容器，
+   放大图标只能当它的子节点，所以要自己保证：不另起一行（inline-flex）、与 chip 里的
+   文字/图标垂直居中、颜色跟着 chip 继承（.svg-icon 用 currentColor），悬停时提亮一档。 */
+
+.text-popup-flair-action {
+	display: inline-flex;
+	align-items: center;
+	margin-inline-start: var(--size-2-1);
+	padding: 0 var(--size-2-1);
+	border-radius: var(--radius-s);
+	vertical-align: middle;
+}
+
+.text-popup-flair-action:hover {
+	color: var(--text-normal);
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。
@@ -104,6 +121,19 @@
 /* 弹窗不是真实文件行，任务列表复选框没有可回写的行号，禁掉交互避免误点 */
 .mod-text-popup .text-popup-text.is-rich input[type='checkbox'] {
 	pointer-events: none;
+}
+
+/* 代码块 / Callout：给它们一个 480px 的宽度下限，超过 480px 之后仍由内容决定宽度。
+   下限写在 .text-popup-text 上、而不是 <pre> / .callout 上：真正「收缩到内容」的是这个
+   容器（flex 项 + margin: auto），给它下限才能让整屏内容一起变宽。
+   反过来给子元素设 min-width: 480px 会把父容器顶破 —— 窗口比 480px + 内边距还窄时
+   内容区会横向滚动、Callout 还会被自己的 overflow: hidden 裁掉（实测 400px 窗口下
+   子元素 480px / 容器只有 272px）。
+   min(480px, 100%) 让窄窗口退化成「正好占满内容区」，窗口够宽时就是纯 480px 下限；
+   :has() 只命中代码块与 Callout，数学块、普通段落、裸引用维持原来的按内容收缩。 */
+.mod-text-popup .text-popup-text.is-rich:has(pre),
+.mod-text-popup .text-popup-text.is-rich:has(.callout) {
+	min-width: min(480px, 100%);
 }
 
 /* 底部控制条：字号 / 缩放 / 恢复默认 */
