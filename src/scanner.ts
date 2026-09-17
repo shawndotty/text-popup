@@ -1,7 +1,8 @@
-import { debounce, Platform, setIcon } from 'obsidian';
+import { debounce, MarkdownView, Platform, setIcon } from 'obsidian';
 import type { App, EventRef } from 'obsidian';
 import { extractRichSource, extractText } from './extract';
 import { TextPopupModal } from './modal';
+import type { TextPopupBody, TextPopupSource } from './modal';
 import type { TextPopupSettings } from './settings';
 import { findSupportedElement } from './tags';
 
@@ -64,6 +65,83 @@ export function removeAllActions(): void {
 	});
 }
 
+/** 一个导航候选：内容元素 + 它对应的放大按钮。 */
+interface PopupEntry {
+	/** 被标记的内容元素，弹窗从这里提取文字。 */
+	target: HTMLElement;
+	/** 该块上已注入的放大按钮，用来定位「当前点开的是哪一个」。 */
+	actionEl: HTMLElement;
+}
+
+/** 与弹窗的空内容判据一致：有文字，或有子元素（例如块里只有一张图片）。 */
+function hasContent(el: HTMLElement): boolean {
+	return Boolean((el.textContent ?? '').trim()) || el.childElementCount > 0;
+}
+
+/**
+ * 采集一个窗格内的全部导航候选，按文档顺序。
+ *
+ * 以「已注入的放大按钮」为准，而不是重新跑一遍标签匹配：这样导航顺序必然等于用户看到的
+ * 图标顺序，也自动继承标签设置、启用开关与平台判断，不必再维护第二套「什么算被标记」的判据。
+ */
+function collectEntries(paneEl: HTMLElement, tags: readonly string[]): PopupEntry[] {
+	const entries: PopupEntry[] = [];
+	paneEl.querySelectorAll<HTMLElement>(`.${ACTION_CLASS}`).forEach((actionEl) => {
+		const blockEl = actionEl.closest<HTMLElement>(BLOCK_SELECTOR);
+		if (!blockEl) return;
+		const target = findSupportedElement(blockEl, tags);
+		// 空块今天点了也不弹窗，直接排除，免得方向键切到一屏空白
+		if (target && hasContent(target)) entries.push({ target, actionEl });
+	});
+	return entries;
+}
+
+/**
+ * 组装一次弹窗会话的导航来源。
+ *
+ * 采集基准固定为「点击时所在的那个编辑器窗格」：多窗格并排打开同一笔记时，
+ * 方向键只在点击的那个窗格内切换，不会跳到另一个窗格。
+ */
+export function createTextPopupSource(
+	host: TextPopupHost,
+	actionEl: HTMLElement,
+): { source: TextPopupSource; startIndex: number } {
+	const view = host.app.workspace.getActiveViewOfType(MarkdownView);
+	let paneEl = view?.containerEl ?? actionEl.ownerDocument.body;
+	const file = host.app.workspace.getActiveFile();
+	const collect = (): PopupEntry[] => collectEntries(paneEl, host.settings.supportedTags);
+
+	// 按钮与候选来自同一批 DOM、同一个 findSupportedElement，节点身份一致，可直接按按钮定位序号
+	let startIndex = collect().findIndex((entry) => entry.actionEl === actionEl);
+	if (startIndex < 0) {
+		// 活动窗格与按钮所在窗格不是同一个（例如点在非活动窗格上）：退回全窗口采集，
+		// 保证「点哪个块就显示哪个块」不回归，代价是候选集可能跨窗格。
+		paneEl = actionEl.ownerDocument.body;
+		startIndex = Math.max(0, collect().findIndex((entry) => entry.actionEl === actionEl));
+	}
+
+	return {
+		startIndex,
+		source: {
+			// 每次都按当前 DOM 重采：弹窗打开期间编辑器重渲染（例如另一个窗格在编辑同一笔记）
+			// 会替换掉块节点，用快照会读到已脱离文档的元素。
+			get size(): number {
+				return collect().length;
+			},
+			sourceName: file?.basename ?? '',
+			// 链接 / 嵌入的解析基准必须是完整路径，basename 会导致相对解析失败。
+			sourcePath: file?.path ?? '',
+			read(index: number): TextPopupBody | null {
+				const target = collect()[index]?.target;
+				if (!target) return null;
+				const plain = extractText(target);
+				const rich = host.settings.renderRichText ? extractRichSource(target) : '';
+				return plain || rich ? { plain, rich } : null;
+			},
+		},
+	};
+}
+
 function injectAction(blockEl: HTMLElement, host: TextPopupHost): void {
 	const actionsEl = blockEl.querySelector<HTMLElement>(ACTIONS_SELECTOR);
 	if (!actionsEl) return;
@@ -86,21 +164,10 @@ function injectAction(blockEl: HTMLElement, host: TextPopupHost): void {
 	setIcon(actionEl, 'zoom-in');
 
 	const open = (): void => {
-		const plain = extractText(target);
-		const rich = host.settings.renderRichText ? extractRichSource(target) : '';
-		if (!plain && !rich) return;
-		const file = host.app.workspace.getActiveFile();
-		new TextPopupModal(
-			host.app,
-			{
-				plain,
-				rich,
-				sourceName: file?.basename ?? '',
-				// 链接 / 嵌入的解析基准必须是完整路径，basename 会导致相对解析失败。
-				sourcePath: file?.path ?? '',
-			},
-			host.settings,
-		).open();
+		const { source, startIndex } = createTextPopupSource(host, actionEl);
+		// 空块不弹窗：与 1.0.2 的 `if (!plain && !rich) return;` 等价
+		if (!source.read(startIndex)) return;
+		new TextPopupModal(host.app, source, startIndex, host.settings).open();
 	};
 
 	actionEl.addEventListener('click', open);
