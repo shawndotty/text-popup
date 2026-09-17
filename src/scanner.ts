@@ -1,22 +1,35 @@
 import { debounce, MarkdownView, Platform, sanitizeHTMLToDom, setIcon } from 'obsidian';
 import type { App, Editor, EventRef } from 'obsidian';
-import { extractRichSource, extractText } from './extract';
-import { scanHtmlBlocks } from './htmlBlocks';
+import { scanTextBlocks } from './blocks';
+import type { BlockKind, TextBlockRegion } from './blocks';
+import {
+	extractCalloutBody,
+	extractFencedBody,
+	extractMathBody,
+	extractRichSource,
+	extractText,
+} from './extract';
 import { TextPopupModal } from './modal';
 import type { TextPopupBody, TextPopupSource } from './modal';
 import type { TextPopupSettings } from './settings';
 import { findSupportedElement } from './tags';
 
 /**
- * 扫描锚点：块级原始 HTML 的专属容器。
+ * 扫描锚点：核心为「可放大的区块」建立的共同容器。
  *
- * 依据（已在本机 Obsidian 应用包中核对）：
- *   this.containerEl = createEl(block ? "div" : "span",
- *       "cm-html-embed" + (block ? " cm-embed-block" : ""));
- *   if (block) this.addEditButton(e, containerEl);   // 仅块级才建 .embed-actions
- * 只有它是「用户手写的 HTML」，因此零误报；按标签名扫描则会误伤 Markdown 生成的 <p>。
+ * 依据（已在本机 obsidian.asar → app.js 中核对）：四类区块的 widget 基类都调
+ * `addEditButton()` → `addAction()`，在容器内建 `.embed-actions` 放控制图标。
+ * 容器本身都带 `.cm-embed-block`：
+ *   - 块级原始 HTML  → `createEl("div", "cm-html-embed cm-embed-block")`
+ *   - 围栏代码块     → `createDiv("cm-preview-code-block cm-embed-block … cm-lang-" + lang)`
+ *   - Callout        → `createDiv("cm-embed-block cm-callout")`（`L3` 传入的 clazz）
+ *   - 数学块         → `"math"` + `toggleClass("math-block" / "cm-embed-block")`
+ * 表格（`.cm-table-widget`）等核心区块不带上面任何一个类名，由 `classifyBlock` 返回 null 过滤掉。
+ *
+ * 注：` ```base ` 块也带 `.cm-preview-code-block`（核心按代码块建容器，CSS 给它的 `.embed-actions`
+ * 设了常显），因此按代码块处理 —— 与「有控制图标的区块才加放大图标」这条判据一致。
  */
-const BLOCK_SELECTOR = '.cm-html-embed.cm-embed-block';
+const BLOCK_SELECTOR = '.cm-embed-block';
 const ACTIONS_SELECTOR = ':scope > .embed-actions';
 const ACTION_CLASS = 'text-popup-action';
 const ACTION_LABEL = '放大显示文字';
@@ -56,9 +69,28 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 	}
 	if (Platform.isMobile) return;
 
+	// 一次遍历 + 类名分类：四类区块共用 `.cm-embed-block`，不必为每类各跑一次全文档查询。
 	activeDocument.querySelectorAll<HTMLElement>(BLOCK_SELECTOR).forEach((blockEl) => {
-		injectAction(blockEl, host);
+		const kind = classifyBlock(blockEl);
+		if (!kind) return;
+		if (isKindEnabled(host.settings, kind)) injectAction(blockEl, host, kind);
+		// 该类被关掉时，把已注入的按钮摘掉（例如关掉「放大代码块」后立刻生效）
+		else removeAction(blockEl);
 	});
+}
+
+/** 容器 → 类别；不属于本插件支持的四类时返回 null（表格等核心区块不参与）。 */
+function classifyBlock(blockEl: HTMLElement): BlockKind | null {
+	if (blockEl.classList.contains('cm-html-embed')) return 'html';
+	if (blockEl.classList.contains('cm-preview-code-block')) return 'code';
+	if (blockEl.classList.contains('cm-callout')) return 'callout';
+	if (blockEl.classList.contains('math-block')) return 'math';
+	return null;
+}
+
+/** 手写 HTML 块由「支持的标签」逐块判定，所以类别层面始终算开启。 */
+function isKindEnabled(settings: TextPopupSettings, kind: BlockKind): boolean {
+	return kind === 'html' ? true : settings.blockKinds[kind];
 }
 
 /** 移除本插件注入的全部按钮（禁用插件、关闭开关时使用）。 */
@@ -68,17 +100,22 @@ export function removeAllActions(): void {
 	});
 }
 
+/** 摘掉某个区块上的按钮（标签列表改小、或该类别被关掉时使用）。 */
+function removeAction(blockEl: HTMLElement): void {
+	blockEl.querySelector<HTMLElement>(`:scope > .embed-actions > .${ACTION_CLASS}`)?.remove();
+}
+
 /** 与弹窗的空内容判据一致：有文字，或有子元素（例如块里只有一张图片）。 */
 function hasContent(el: HTMLElement): boolean {
 	return Boolean((el.textContent ?? '').trim()) || el.childElementCount > 0;
 }
 
-/** 打开一次弹窗时就定下来的候选快照：区间 + 提取内容的元素。 */
+/** 打开一次弹窗时就定下来的候选快照：区间 + 惰性内容读取。 */
 interface PopupCandidate {
-	startLine: number;
-	endLine: number;
-	/** 区间文本渲染出来的元素（离屏），弹窗从这里提取 plain / rich。 */
-	target: HTMLElement;
+	region: TextBlockRegion;
+	/** 仅 html 类：离屏渲染出的元素，供「按内容兜底匹配」使用。 */
+	target?: HTMLElement;
+	read(): TextPopupBody | null;
 }
 
 /**
@@ -126,24 +163,28 @@ function locateStartIndex(
 	if (cm) {
 		try {
 			const line = editor.offsetToPos(cm.posAtDOM(blockEl)).line;
-			const hit = candidates.findIndex((c) => line >= c.startLine && line <= c.endLine);
+			const hit = candidates.findIndex(
+				(c) => line >= c.region.startLine && line <= c.region.endLine,
+			);
 			if (hit >= 0) return hit;
 			// posAtDOM 可能落在区间前一行（块级 widget 的边界）：取第一个起点不早于它的候选
-			const next = candidates.findIndex((c) => c.startLine >= line);
+			const next = candidates.findIndex((c) => c.region.startLine >= line);
 			if (next >= 0) return next;
 		} catch (error) {
 			console.error('[text-popup] posAtDOM 定位失败，改为按内容匹配', error);
 		}
 	}
 	const key = extractText(blockEl);
-	const byText = candidates.findIndex((c) => extractText(c.target) === key);
+	const byText = candidates.findIndex(
+		(c) => c.target !== undefined && extractText(c.target) === key,
+	);
 	return byText >= 0 ? byText : 0;
 }
 
 /**
  * 组装一次弹窗会话的导航来源。
  *
- * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanHtmlBlocks`），不是 DOM：
+ * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，四类区间按类别开关过滤），不是 DOM：
  * Live Preview 只渲染视口附近的块，以 DOM 为准会让「总数」随滚动 / 光标 / 分屏变化。
  * 打开时算一次、提取一次，弹窗打开期间不再重采 —— 标题的总数与正文永远同源。
  */
@@ -166,13 +207,10 @@ export function createTextPopupSource(
 	});
 
 	const candidates: PopupCandidate[] = [];
-	for (const block of editor ? scanHtmlBlocks(editor.getValue()) : []) {
-		// 与核心 widget 同样的渲染方式（公开 API sanitizeHTMLToDom），结构与编辑器里同源
-		const holder = measureEl.createDiv();
-		holder.appendChild(sanitizeHTMLToDom(block.raw));
-		const target = findSupportedElement(holder, host.settings.supportedTags);
-		// 空块今天点了也不弹窗，直接排除，免得方向键切到一屏空白
-		if (target && hasContent(target)) candidates.push({ ...block, target });
+	for (const region of editor ? scanTextBlocks(editor.getValue()) : []) {
+		if (!isKindEnabled(host.settings, region.kind)) continue;
+		const candidate = createCandidate(region, host, measureEl);
+		if (candidate) candidates.push(candidate);
 	}
 
 	const startIndex = editor ? locateStartIndex(editor, actionEl, candidates) : 0;
@@ -188,11 +226,7 @@ export function createTextPopupSource(
 			// 链接 / 嵌入的解析基准必须是完整路径，basename 会导致相对解析失败。
 			sourcePath: file?.path ?? '',
 			read(index: number): TextPopupBody | null {
-				const target = candidates[index]?.target;
-				if (!target) return null;
-				const plain = extractText(target);
-				const rich = host.settings.renderRichText ? extractRichSource(target) : '';
-				return plain || rich ? { plain, rich } : null;
+				return candidates[index]?.read() ?? null;
 			},
 			dispose(): void {
 				measureEl.remove();
@@ -201,15 +235,69 @@ export function createTextPopupSource(
 	};
 }
 
-function injectAction(blockEl: HTMLElement, host: TextPopupHost): void {
+/**
+ * 一个区间 → 一个候选；内容为空（点了会弹空白屏）时返回 null。
+ *
+ * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素。
+ * 另外三类是纯字符串处理，不需要 DOM，也不需要离屏宿主。
+ */
+function createCandidate(
+	region: TextBlockRegion,
+	host: TextPopupHost,
+	measureEl: HTMLElement,
+): PopupCandidate | null {
+	if (region.kind === 'html') {
+		// 与核心 widget 同样的渲染方式（公开 API sanitizeHTMLToDom），结构与编辑器里同源
+		const holder = measureEl.createDiv();
+		holder.appendChild(sanitizeHTMLToDom(region.raw));
+		const target = findSupportedElement(holder, host.settings.supportedTags);
+		if (!target || !hasContent(target)) return null;
+		return {
+			region,
+			target,
+			read: () => {
+				const plain = extractText(target);
+				const rich = host.settings.renderRichText ? extractRichSource(target) : '';
+				return plain || rich ? { plain, rich } : null;
+			},
+		};
+	}
+
+	const plain = readTextBody(region);
+	if (!plain) return null;
+	return {
+		region,
+		read: () => {
+			// rich 是区间原文：代码块 / Callout / 数学块都由 MarkdownRenderer 渲染成对应形态
+			const rich = host.settings.renderRichText ? region.raw : '';
+			return plain || rich ? { plain, rich } : null;
+		},
+	};
+}
+
+/** 三类原生区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
+function readTextBody(region: TextBlockRegion): string {
+	switch (region.kind) {
+		case 'code':
+			return extractFencedBody(region.raw);
+		case 'callout':
+			return extractCalloutBody(region.raw);
+		case 'math':
+			return extractMathBody(region.raw);
+		default:
+			return '';
+	}
+}
+
+function injectAction(blockEl: HTMLElement, host: TextPopupHost, kind: BlockKind): void {
 	const actionsEl = blockEl.querySelector<HTMLElement>(ACTIONS_SELECTOR);
 	if (!actionsEl) return;
 
 	// 幂等判据：按钮是否已存在。核心重渲染后 DOM 被重建，这里会自动补回。
 	const existingEl = actionsEl.querySelector<HTMLElement>(`:scope > .${ACTION_CLASS}`);
-	const target = findSupportedElement(blockEl, host.settings.supportedTags);
 
-	if (!target) {
+	// 只有手写 HTML 块需要「按标签名」逐块判定；另外三类的闸门就是上面的类别开关。
+	if (kind === 'html' && !findSupportedElement(blockEl, host.settings.supportedTags)) {
 		// 标签列表被改小之后，清理不再符合条件的按钮。
 		existingEl?.remove();
 		return;

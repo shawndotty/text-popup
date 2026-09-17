@@ -31,6 +31,40 @@ export function extractRichSource(el: HTMLElement): string {
 	return dedent(clone.innerHTML);
 }
 
+/**
+ * 围栏代码块的正文：去掉开围栏行（含 info string）与闭围栏行。
+ *
+ * 只用于「关闭富文本渲染」时的纯文本回退；打开时弹窗直接回灌区间原文，
+ * 交给 `MarkdownRenderer` 渲染成带语法高亮的代码块。
+ */
+export function extractFencedBody(raw: string): string {
+	const lines = raw.split('\n');
+	if (lines.length > 1 && FENCE_OPEN.test(lines[0] ?? '')) lines.shift();
+	if (lines.length > 0 && FENCE_ONLY.test(lines[lines.length - 1] ?? '')) lines.pop();
+	return lines.join('\n').trim();
+}
+
+/** 开围栏：3 个及以上反引号或波浪号（后面可以跟 info string）。 */
+const FENCE_OPEN = /^ {0,3}(?:`{3,}|~{3,})/;
+/** 独占一行的围栏：闭围栏的形态。 */
+const FENCE_ONLY = /^ {0,3}(?:`{3,}|~{3,})\s*$/;
+
+/**
+ * Callout 的正文：去掉每行的 `> ` 前缀，再去掉首行的 `[!TYPE]` 标记（保留标题文字）。
+ *
+ * 标题行保留是有意为之：点开 Callout 通常也要看标题；想只看正文可关闭「渲染 HTML 与 Markdown」。
+ */
+export function extractCalloutBody(raw: string): string {
+	const lines = raw.split('\n').map((line) => line.replace(/^ {0,3}> ?/, ''));
+	if (lines.length > 0) lines[0] = (lines[0] ?? '').replace(/^\[![^\]]+\][+-]?\s*/, '');
+	return lines.join('\n').trim();
+}
+
+/** 数学块的 TeX 源码：去掉 `$$` 定界符。 */
+export function extractMathBody(raw: string): string {
+	return raw.replace(/\$\$/g, '').trim();
+}
+
 /** 去首尾空行 + 按最小缩进整体左移（只左移，不吞内容）。 */
 function dedent(text: string): string {
 	const lines = text.replace(/\r\n?/g, '\n').split('\n');

@@ -3,6 +3,9 @@ import type TextPopupPlugin from './main';
 import { refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
 
+/** 三类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
+export type BlockKindSettings = Record<'code' | 'callout' | 'math', boolean>;
+
 export interface TextPopupSettings {
 	/** 是否在实时预览中显示放大图标。 */
 	enabled: boolean;
@@ -16,6 +19,8 @@ export interface TextPopupSettings {
 	popupFontSize: number;
 	/** 被标记时触发放大的标签列表（设置页可编辑）。 */
 	supportedTags: string[];
+	/** 代码块 / Callout / 数学块是否显示放大图标。 */
+	blockKinds: BlockKindSettings;
 }
 
 export const DEFAULT_SETTINGS: TextPopupSettings = {
@@ -25,6 +30,7 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupTextColor: '',
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
+	blockKinds: { code: true, callout: true, math: true },
 };
 
 export const FONT_SIZE_MIN = 12;
@@ -45,6 +51,20 @@ function readString(value: unknown, fallback: string): string {
 	return typeof value === 'string' ? value : fallback;
 }
 
+function readBoolean(value: unknown, fallback: boolean): boolean {
+	return typeof value === 'boolean' ? value : fallback;
+}
+
+/** 老 `data.json` 没有 `blockKinds`，逐键回落到默认值即可，不需要迁移脚本。 */
+function readBlockKinds(value: unknown): BlockKindSettings {
+	const data = (value ?? {}) as Partial<BlockKindSettings>;
+	return {
+		code: readBoolean(data.code, DEFAULT_SETTINGS.blockKinds.code),
+		callout: readBoolean(data.callout, DEFAULT_SETTINGS.blockKinds.callout),
+		math: readBoolean(data.math, DEFAULT_SETTINGS.blockKinds.math),
+	};
+}
+
 /** 把磁盘上可能残缺 / 过期的数据整理成一份完整设置。 */
 export function normalizeSettings(raw: unknown): TextPopupSettings {
 	const data = (raw ?? {}) as Partial<TextPopupSettings>;
@@ -61,6 +81,7 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 		popupTextColor: readString(data.popupTextColor, DEFAULT_SETTINGS.popupTextColor),
 		popupFontSize: clampFontSize(data.popupFontSize),
 		supportedTags: normalizeTagList(data.supportedTags),
+		blockKinds: readBlockKinds(data.blockKinds),
 	};
 }
 
@@ -78,7 +99,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('启用放大图标')
-			.setDesc('在实时预览中，为块级 HTML 内容显示放大图标。')
+			.setDesc('在实时预览中，为支持的区块显示放大图标。')
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
 					this.plugin.settings.enabled = value;
@@ -86,6 +107,25 @@ export class TextPopupSettingTab extends PluginSettingTab {
 					refreshTextPopupActions(this.plugin);
 				}),
 			);
+
+		this.addBlockKindSetting(
+			containerEl,
+			'code',
+			'放大代码块',
+			'为实时预览里的围栏代码块显示放大图标。',
+		);
+		this.addBlockKindSetting(
+			containerEl,
+			'callout',
+			'放大 Callout',
+			'为实时预览里的标注（Callout）显示放大图标。',
+		);
+		this.addBlockKindSetting(
+			containerEl,
+			'math',
+			'放大数学块',
+			'为实时预览里的 $$ 数学块显示放大图标。',
+		);
 
 		new Setting(containerEl)
 			.setName('渲染 HTML 与 Markdown')
@@ -129,7 +169,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('支持的标签')
-			.setDesc('用逗号分隔，例如 div, p。修改后立即生效，不需要改代码。')
+			.setDesc('只对手写的块级 HTML 生效，用逗号分隔，例如 div, p。修改后立即生效，不需要改代码。')
 			.addText((text) =>
 				text
 					.setPlaceholder(DEFAULT_TAGS.join(', '))
@@ -141,6 +181,25 @@ export class TextPopupSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						refreshTextPopupActions(this.plugin);
 					}),
+			);
+	}
+
+	/** 三类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。 */
+	private addBlockKindSetting(
+		containerEl: HTMLElement,
+		key: keyof BlockKindSettings,
+		name: string,
+		desc: string,
+	): void {
+		new Setting(containerEl)
+			.setName(name)
+			.setDesc(desc)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.blockKinds[key]).onChange(async (value) => {
+					this.plugin.settings.blockKinds[key] = value;
+					await this.plugin.saveSettings();
+					refreshTextPopupActions(this.plugin);
+				}),
 			);
 	}
 
