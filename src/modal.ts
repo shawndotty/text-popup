@@ -21,6 +21,24 @@ function round1(value: number): number {
 	return Math.round(value * 10) / 10;
 }
 
+/**
+ * 从一份 computed style 里挑出六级标题色变量（`--h1-color`…`--h6-color`），空值不收。
+ *
+ * 抽成纯函数是为了能被 `tests/modal.test.mjs` 直接喂假值钉住 —— 本仓库没有能跑真实样式的
+ * DOM 环境（与 `tests/styles.test.mjs` 同一条理由）。取值与判空的逻辑见 `applyThemeHeadingColors`。
+ */
+export function headingColorVariables(style: {
+	getPropertyValue(name: string): string;
+}): [name: string, value: string][] {
+	const variables: [name: string, value: string][] = [];
+	for (let level = 1; level <= 6; level++) {
+		const name = `--h${level}-color`;
+		const value = style.getPropertyValue(name).trim();
+		if (value) variables.push([name, value]);
+	}
+	return variables;
+}
+
 /** 单个条目的内容。 */
 export interface TextPopupBody {
 	/** 纯文本内容（extractText），回退路径使用。 */
@@ -92,6 +110,9 @@ export class TextPopupModal extends Modal {
 		if (background) this.modalEl.style.setProperty('--text-popup-bg', background);
 		const foreground = this.settings.popupTextColor;
 		if (foreground) this.modalEl.style.setProperty('--text-popup-fg', foreground);
+		// 跟随主题时连主题的六级标题色一起搬进来；填了自定义色就不搬 —— 那是用户在显式覆盖
+		// 弹窗文字色，标题跟着继承这个颜色（既有行为）。两者取舍见 applyThemeHeadingColors。
+		if (!foreground) this.applyThemeHeadingColors();
 
 		// 必须在 render 之前 load：渲染出的子组件会挂在它下面。
 		this.component.load();
@@ -116,6 +137,31 @@ export class TextPopupModal extends Modal {
 		this.contentEl.empty();
 		// 移除离屏宿主，不留游离节点
 		this.source.dispose?.();
+	}
+
+	/**
+	 * 把主题的六级标题色搬进弹窗（只在「弹窗文字颜色 = 跟随主题」时调用）。
+	 *
+	 * 核心给标题写的是 `color: var(--hN-color)`（app.css 的 `h1, .markdown-rendered h1 {
+	 * color: var(--h1-color) }`），主题（实测 AnuPpuccin 的 `anp-h1-red` … 六个类）把这六个变量
+	 * 声明在 `.app-container` 上。而 Obsidian 把弹窗挂在 `body > .modal-container` —— 与
+	 * `.app-container` 是**兄弟节点**，变量传不进来：弹窗里的 `--hN-color` 落到核心 `:root` 的
+	 * `--hN-color: inherit`（空值），`color` 于是退回继承正文色。真机实测同一段
+	 * `<h2>Test Heading</h2>`：笔记里是 `rgb(250,179,135)`（主题桃色）、弹窗里是
+	 * `rgb(198,208,245)`（`--text-normal`）—— 就是「选了跟随主题、标题色却没跟随主题」。
+	 *
+	 * 把算好的值搬到弹窗根节点后，弹窗里的标题色与笔记逐级一致。这条路径与主题无关：
+	 * 只要主题用核心的 `--hN-color` 给标题上色（声明在 `:root` / `body` / `.app-container`
+	 * 任一层的算好的值都会出现在 `.app-container` 上），弹窗就能拿到。主题没定义（取到空值）
+	 * 时一个变量都不设，保持核心原本的「标题继承正文色」。
+	 */
+	private applyThemeHeadingColors(): void {
+		const appContainer = activeDocument.querySelector<HTMLElement>('.app-container');
+		if (!appContainer) return;
+		const style = activeWindow.getComputedStyle(appContainer);
+		for (const [name, value] of headingColorVariables(style)) {
+			this.modalEl.style.setProperty(name, value);
+		}
 	}
 
 	/**
