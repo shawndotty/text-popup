@@ -10,13 +10,15 @@
 }
 
 /* 代码块右上角的「语言名 / 复制」chip（核心 .code-block-flair）里没有 .embed-actions 容器，
-   放大图标只能当它的子节点，所以要自己保证：不另起一行（inline-flex）、与 chip 里的
-   文字/图标垂直居中、颜色跟着 chip 继承（.svg-icon 用 currentColor），悬停时提亮一档。 */
+   放大图标只能当它的子节点（插在首位，见 scanner.ts 的 injectFlairAction），所以要自己保证：
+   不另起一行（inline-flex）、与 chip 里的文字/图标垂直居中、颜色跟着 chip 继承
+   （.svg-icon 用 currentColor），悬停时提亮一档。
+   margin 用 inline-end：图标在语言名 / 复制图标的**前面**，间距要留在它右边。 */
 
 .text-popup-flair-action {
 	display: inline-flex;
 	align-items: center;
-	margin-inline-start: var(--size-2-1);
+	margin-inline-end: var(--size-2-1);
 	padding: 0 var(--size-2-1);
 	border-radius: var(--radius-s);
 	vertical-align: middle;

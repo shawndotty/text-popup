@@ -356,13 +356,18 @@ function injectAction(blockEl: HTMLElement, host: TextPopupHost, kind: BlockKind
  * 与 `.embed-actions` 版本的区别只有锚点：chip 里没有图标槽位，所以按钮是 chip 的**子节点**
  * （`inline` → span，样式见 styles.css 的 `.text-popup-flair-action`）。嵌在 widget 内部这一点
  * 是刻意的：CM6 会忽略 widget 内部的 DOM 变更，按钮不会被「看不懂的 DOM 变更」反复冲掉。
+ *
+ * 插在 chip 首位（与 `injectAction` 同一约定）：核心 `E3.toDOM` 建的 chip 只有一个子节点 ——
+ * 有语言时是语言名的文本节点，语言为空时是 `lucide-copy` 复制图标（见 `CODE_FLAIR_SELECTOR`）。
+ * 插到首位 → 放大图标落在语言名 / 复制图标的前面，与 HTML 块、Callout、数学块的
+ * `.embed-actions` 里「放大图标在最左」保持同一套肌肉记忆（RTL 由核心样式自动镜像）。
  */
 function injectFlairAction(flairEl: HTMLElement, host: TextPopupHost): void {
 	// 引用块 / Callout 源码里的围栏行首带 `>`，扫描器不当候选（见 blocks.ts），因此不挂按钮：
 	// 哪怕哪天这类行真挂上了 chip，也不会出现「点开却翻出别的块」。实测当前版本核心不给它们建 chip。
 	if (flairEl.closest('.cm-line')?.classList.contains('HyperMD-quote')) return;
 	if (flairEl.querySelector<HTMLElement>(`:scope > .${FLAIR_ACTION_CLASS}`)) return;
-	flairEl.appendChild(createActionEl(flairEl, host, FLAIR_ACTION_CLASS, true));
+	flairEl.insertBefore(createActionEl(flairEl, host, FLAIR_ACTION_CLASS, true), flairEl.firstChild);
 }
 
 /**
