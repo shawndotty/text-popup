@@ -1,2 +1,1 @@
-- separate wrapper tag settings for single-line (p) and multi-line (div) selections
-- convert Markdown lists (ul / ol / task) into real HTML lists in Popup Selected Text
+- change style to show iframe wrapped in div better
