@@ -1,2 +1,3 @@
 - Add multi languages support
 - separate wrapper tag settings for single-line (p) and multi-line (div) selections
+- convert Markdown lists (ul / ol / task) into real HTML lists in Popup Selected Text

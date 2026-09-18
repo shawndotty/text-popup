@@ -9,15 +9,28 @@
  *   第一段第一行<br>第一段第二行<br><br>第二段
  *   </div>
  *
- * 两条来自既有实现的硬约束：
+ * 列表是唯一一个「留原文就彻底失效」的块级语法（`- a<br>- b` 在编辑器与弹窗里都不会成列表），
+ * 所以它被特判成真正的 HTML 列表，压在正文那一行里：
+ *
+ *   <div>
+ *   文字<br><ul><li>一项</li><li>二项</li></ul><br>文字
+ *   </div>
+ *
+ * **三条**来自既有实现的硬约束：
  * - **块里不能有空行**：块级原始 HTML 到第一个空行就结束（`blocks.ts` 的 `matchHtmlBlock`），
  *   一旦生成空行，块会被截断、后半段掉出弹窗。正文写成**独占一行的单行**，结构上不可能有空行。
  * - **正文里的行结构不能用 `<p>`**：`<p><p>a</p><p>b</p></p>` 会被 HTML 解析器拆开，
  *   `findSupportedElement`（`tags.ts`）命中的是第一个空 `<p>`，`hasContent` 为假 → 块直接不算候选。
  *   用 `<br>` 表达换行，则 `div` / `p` / `section` 等任意块级标签都是合法嵌套。
+ * - **正文里的块级元素只能是 `ul` / `ol`**（以及它们的 `li`），且只画在正文那一行里，不引入换行。
+ *   推论：**含列表的正文不能拿 `p` 当外壳** —— 解析器在「in body」插入模式下遇到 `<ul>` 会自动闭合
+ *   未闭合的 `<p>`，末尾那个孤立 `</p>` 还会再补出一个**空 `<p>`**，`findSupportedElement` 命中的
+ *   就是这个空元素 → `hasContent` 为假 → 块没有放大图标。命令层因此把「选区正文含列表」判成多行形态
+ *   （`hasBlockBody`），并给 `resolvePopupTag` 加了一条 `p` 守卫兜底。
  *
  * 注意区分上面第二条与**外层标签**：外层标签用 `p`（单行选区的默认值）是合法的 ——
- * 它的正文要么是单行纯文本（不含任何 `<br>`），要么用 `<br>` 表达换行，都不涉及「正文里拿 `<p>` 当行结构」。
+ * 它的正文要么是单行纯文本（不含任何 `<br>` 与块级元素），要么用 `<br>` 表达换行，
+ * 都不涉及「正文里拿 `<p>` 当行结构」。
  *
  * 为什么 `<br>` 后面**不**跟源码换行：弹窗的富文本渲染走 `MarkdownRenderer`，而本库的
  * 「严格换行」是关的 —— 一个软换行也会渲染成 `<br>`。于是 `A<br>\nB` 在弹窗里会变成
@@ -231,6 +244,188 @@ export function isSingleLine(text: string): boolean {
 	return bodyLines(text).length === 1;
 }
 
+/** 一行原文切片成的列表项；不是列表行时 `splitListLine` 返回 null。 */
+interface ListLine {
+	/** 无序 / 有序。`*` `+` 与 `-` 同属无序（反向统一还原成 `-`）。 */
+	kind: 'ul' | 'ol';
+	/** 有序列表的编号（无序为 0，只用于整层的 `start`）。 */
+	number: number;
+	/** 任务项的勾选状态；非任务项为 null。 */
+	task: boolean | null;
+	/** 项内容（已剥掉列表标记、任务标记与标记后的空白）。 */
+	content: string;
+	/** 前导缩进列数（空格 1 列、Tab 按 1 列，不做 Tab 展开）。 */
+	indent: number;
+}
+
+/**
+ * 分隔线：整行由同一个 `-` / `*` / `_` 组成 ≥3 个（允许中间空白，如 `- - -` / `* * *`）。
+ * 必须先于列表判据命中 —— `- - -` 剥掉首标记后剩下的 `- -` 长得就像一个列表项。
+ */
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+
+/** 无序标记；标记后必须是空白或行尾（`-test` / `*斜体*` 都不是列表）。 */
+const UNORDERED = /^([-*+])(?:[ \t]+(.*))?$/;
+
+/** 有序标记：1–9 位数字 + `.` / `)`；同样要求标记后有空白或行尾（`1.test` 不是列表）。 */
+const ORDERED = /^(\d{1,9})([.)])(?:[ \t]+(.*))?$/;
+
+/** 任务标记：`[ ]` / `[x]` / `[X]`，后面必须是空白或行尾（`- [x]a` 不算任务，按普通内容走）。 */
+const TASK = /^\[([ xX])\](?:[ \t]+(.*))?$/;
+
+/**
+ * 把一行原文切成列表项。
+ *
+ * 判据按 CommonMark 收紧，**宁可漏判也不误判**：标记后必须是空白或行尾，分隔线整行排除，
+ * `*斜体*` / `snake_case` / `-test` / `1.test` 都留在原文里走行内转换。
+ * 上一行是普通文本、下一行是 `- a` **算列表**（CommonMark 允许段落紧接列表，与编辑器观感一致）。
+ */
+function splitListLine(line: string): ListLine | null {
+	if (THEMATIC_BREAK.test(line)) return null;
+
+	const leading = /^[ \t]*/.exec(line)?.[0] ?? '';
+	const rest = line.slice(leading.length);
+
+	const unordered = UNORDERED.exec(rest);
+	const ordered = unordered ? null : ORDERED.exec(rest);
+	if (!unordered && !ordered) return null;
+
+	const content = (unordered ? unordered[2] : ordered?.[3]) ?? '';
+	const task = TASK.exec(content);
+
+	return {
+		kind: unordered ? 'ul' : 'ol',
+		number: ordered ? Number.parseInt(ordered[1] ?? '1', 10) : 0,
+		task: task ? task[1] !== ' ' : null,
+		content: task ? (task[2] ?? '') : content,
+		indent: leading.length,
+	};
+}
+
+/**
+ * 正文里是否会出现块级元素（列表）。
+ *
+ * 命令层用它把单行选区的判据从「没有 `<br>`」收紧成「没有 `<br>` 也没有块级元素」：
+ * 正文里出现 `<ul>` / `<ol>` 时外壳不能用 `<p>`（见文件头第三条契约）。
+ * 与 `isSingleLine` 共用 `bodyLines`，判定与生成不会漂移。
+ */
+export function hasBlockBody(text: string): boolean {
+	return bodyLines(text).some((line) => splitListLine(line) !== null);
+}
+
+/** 一个列表层：同缩进、同 kind 的一串项。 */
+interface ListBlock {
+	kind: 'ul' | 'ol';
+	/** 该层的缩进列数；只用于建树，不参与输出。 */
+	indent: number;
+	/** 有序列表的起始编号（取该层首项的编号）。 */
+	number: number;
+	items: ListItemNode[];
+	/** 该层是否含任务项 —— 只要有就整个列表带 `contains-task-list`（核心的判据）。 */
+	hasTask: boolean;
+}
+
+interface ListItemNode {
+	task: boolean | null;
+	content: string;
+	/** 该项下嵌套的列表层；同缩进换 kind 时会追加成第二个兄弟层。 */
+	children: ListBlock[];
+}
+
+/**
+ * 把一段连续的列表行拼成层级结构。
+ *
+ * 缩进栈：比当前层更深 = 子列表（挂在上一层最后那个还没闭合的项里）；更浅 = 收口若干层；
+ * 同缩进换 kind = 另起一个兄弟列表。结构先建好再渲染，是为了让 `contains-task-list`
+ * 能落到「整层只要有一个任务项」这条核心判据上，而不是只看首项。
+ */
+function buildListBlocks(items: readonly ListLine[]): ListBlock[] {
+	const roots: ListBlock[] = [];
+	const stack: ListBlock[] = [];
+
+	for (const item of items) {
+		while (stack.length > 0 && (stack[stack.length - 1]?.indent ?? 0) > item.indent) stack.pop();
+		const top = stack[stack.length - 1];
+		if (top && top.indent === item.indent && top.kind !== item.kind) stack.pop();
+
+		const parent = stack[stack.length - 1];
+		let block = parent && parent.indent === item.indent ? parent : null;
+		if (!block) {
+			block = { kind: item.kind, indent: item.indent, number: item.number, items: [], hasTask: false };
+			const owner = parent?.items[parent.items.length - 1];
+			if (owner) owner.children.push(block);
+			else roots.push(block);
+			stack.push(block);
+		}
+
+		block.items.push({ task: item.task, content: item.content, children: [] });
+		if (item.task !== null) block.hasTask = true;
+	}
+
+	return roots;
+}
+
+/**
+ * 列表层级结构 → HTML。markup 照抄核心（`ul.contains-task-list` / `li.task-list-item` /
+ * `input.task-list-item-checkbox`）：这些类名是核心 CSS 的锚点，编辑器 HTML 块与弹窗两处都拿得到。
+ *
+ * 项内容一律走 `convertInline` —— 列表项不需要任何专门处理，`**粗体**` / `==高亮==` / `` `code` ``
+ * 与普通行走同一条路。刻意不抄 `data-line` / `data-task`（那是实时预览回写笔记用的行号锚点，
+ * 我们没有行号语义），用 `disabled` 表示「这里点不动」，与核心的非交互形态一致。
+ */
+function renderListBlocks(blocks: readonly ListBlock[]): string {
+	let out = '';
+
+	for (const block of blocks) {
+		out +=
+			block.kind === 'ul'
+				? `<ul${block.hasTask ? ' class="contains-task-list"' : ''}>`
+				: `<ol${block.number !== 1 ? ` start="${block.number}"` : ''}>`;
+
+		for (const item of block.items) {
+			out +=
+				item.task === null
+					? `<li>${convertInline(item.content)}`
+					: `<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox"${item.task ? ' checked' : ''} disabled> ${convertInline(item.content)}`;
+			out += renderListBlocks(item.children);
+			out += '</li>';
+		}
+
+		out += block.kind === 'ul' ? '</ul>' : '</ol>';
+	}
+
+	return out;
+}
+
+/**
+ * 正文行 → HTML：连续的列表行归成一段渲染成列表元素，其余行照旧逐行走行内转换。
+ * 行与行、段与段之间一律用 `<br>` 连接 —— 列表元素因此压在正文那一行里，块里不会出现空行。
+ */
+function renderBody(lines: readonly string[]): string {
+	const parts: string[] = [];
+	let index = 0;
+
+	while (index < lines.length) {
+		const line = lines[index] ?? '';
+		if (!splitListLine(line)) {
+			parts.push(convertInline(line));
+			index += 1;
+			continue;
+		}
+
+		const run: ListLine[] = [];
+		while (index < lines.length) {
+			const item = splitListLine(lines[index] ?? '');
+			if (!item) break;
+			run.push(item);
+			index += 1;
+		}
+		parts.push(renderListBlocks(buildListBlocks(run)));
+	}
+
+	return parts.join('<br>');
+}
+
 /**
  * Popup：把选中的 Markdown 文本转成可放大的 HTML 块。
  *
@@ -238,10 +433,10 @@ export function isSingleLine(text: string): boolean {
  * 既保证块里没有空行，也让弹窗的富文本渲染不多出换行（见文件头的格式说明）。
  * 选区末尾的空行会被丢掉：编辑器选到行尾时常常多带一个换行，留着只会让 `</T>` 前多出一行。
  *
- * `tag` 由命令层决定（按 `isSingleLine` 取单行 / 多行标签）；本函数的签名与行为不随设置变化。
+ * `tag` 由命令层决定（按 `isSingleLine` 与 `hasBlockBody` 取单行 / 多行标签）；本函数的签名与行为不随设置变化。
  */
 export function markdownToHtml(text: string, tag: string): string {
-	const body = bodyLines(text).map((line) => convertInline(line)).join('<br>');
+	const body = renderBody(bodyLines(text));
 	return `<${tag}>\n${body}\n</${tag}>`;
 }
 
@@ -269,6 +464,209 @@ const BACKWARD_RULES: Readonly<Record<string, BackwardRule>> = {
 	br: { marker: '\n', void: true },
 };
 
+/** 任务复选框：`<li>` 内容开头那个 `<input type="checkbox">`（属性顺序与引号都容忍）。 */
+const CHECKBOX_INPUT = /^<input\b[^<>]*>/i;
+const CHECKBOX_TYPE = /\btype\s*=\s*["']?checkbox["']?/i;
+const CHECKBOX_CHECKED = /\bchecked\b/i;
+
+/** 嵌套列表每深一层补的缩进（与 `splitListLine` 的 indent 同一把尺子：2 空格）。 */
+const NESTED_INDENT = '  ';
+
+/** 跳过 HTML 里没有语义的空白（项与项之间、`<li>` 与 `</ul>` 之间的换行与缩进）。 */
+function skipHtmlWhitespace(text: string, from: number): number {
+	let index = from;
+	while (index < text.length && /\s/.test(text.charAt(index))) index += 1;
+	return index;
+}
+
+/** `<ol start="3">` 的首项编号；没有 `start` 或值不合法时返回 null（按 1 处理）。 */
+function readStartNumber(raw: string): number | null {
+	const value = Number.parseInt(/\bstart\s*=\s*["']?(\d+)/i.exec(raw)?.[1] ?? '', 10);
+	return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * 从 `<li>` 开标签之后读到与它配对的 `</li>`。
+ *
+ * 配对按 `li` 深度计数（嵌套列表里还有 `<li>`），否则会在第一个内层 `</li>` 处截断。
+ * 找不到配对（未闭合、被别的 `</ul>` 打断、读到文末）返回 null，由调用方按「原样保留」处理。
+ */
+function sliceLiContent(text: string, from: number): { raw: string; end: number } | null {
+	let depth = 0;
+	let pos = from;
+
+	while (pos < text.length) {
+		const at = text.indexOf('<', pos);
+		if (at < 0) return null;
+
+		const tag = readTag(text, at);
+		if (!tag) {
+			pos = at + 1;
+			continue;
+		}
+
+		if (tag.name === 'li') {
+			if (tag.closing) {
+				if (depth === 0) return { raw: text.slice(from, at), end: at + tag.raw.length };
+				depth -= 1;
+			} else {
+				depth += 1;
+			}
+		}
+		pos = at + tag.raw.length;
+	}
+
+	return null;
+}
+
+/** 一个 `<li>` 的内容切成 Markdown：`lines[0]` 是项内容，后面是嵌套列表的 Markdown 行。 */
+interface LiContent {
+	task: boolean | null;
+	lines: string[];
+}
+
+/**
+ * `<li>` 内容 → Markdown 行。
+ *
+ * - 开头的 `<input type="checkbox">` 认成任务复选框，勾选态看有没有 `checked`；`<input>` 与内容
+ *   之间那一个空格文本节点吃掉（核心的 markup 里固定有一个）；
+ * - 嵌套的 `<ul>` / `<ol>` 递归还原成列表行，由调用方统一缩进；
+ * - 嵌套列表**之后**还有非空白内容时判为畸形（Markdown 的列表项表达不了那种结构）→ 返回 null。
+ */
+function parseLiContent(raw: string): LiContent | null {
+	let body = raw.trimStart();
+	let task: boolean | null = null;
+
+	const input = CHECKBOX_INPUT.exec(body);
+	if (input && CHECKBOX_TYPE.test(input[0])) {
+		task = CHECKBOX_CHECKED.test(input[0]);
+		body = body.slice(input[0].length).trimStart();
+	}
+
+	let inline = '';
+	const nested: string[] = [];
+	let seenList = false;
+	let pos = 0;
+
+	while (pos < body.length) {
+		const at = body.indexOf('<', pos);
+		const chunk = at < 0 ? body.slice(pos) : body.slice(pos, at);
+
+		if (chunk.trim() === '') {
+			if (!seenList) inline += chunk;
+		} else if (seenList) {
+			return null;
+		} else {
+			inline += chunk;
+		}
+
+		if (at < 0) break;
+
+		const tag = readTag(body, at);
+		if (tag && !tag.closing && (tag.name === 'ul' || tag.name === 'ol')) {
+			const list = readListElement(body, at);
+			if (!list) return null;
+			nested.push(list.markdown);
+			seenList = true;
+			pos = list.end;
+			continue;
+		}
+		if (seenList) return null;
+
+		inline += tag ? tag.raw : '<';
+		pos = at + (tag ? tag.raw.length : 1);
+	}
+
+	return { task, lines: [inline.trimEnd(), ...nested.flatMap((markdown) => markdown.split('\n'))] };
+}
+
+/**
+ * 解析一个列表元素（`<ul>` / `<ol>`）→ Markdown（`\n` 分隔的行，项与项之间不空行）。
+ *
+ * 畸形结构（没有 `<li>`、缺闭标签、项内嵌套不闭合、项内容表达不了）一律返回 null：
+ * 调用方会把它当「未知标签」整段原样保留，不猜、不修复（非破坏性原则）。
+ *
+ * 三条有意的归一化（README 的反向对照表里写明）：无序标记 `*` / `+` → `-`；有序标记 `1)` → `1.`；
+ * `<ol>` 只保留首项编号（`start` 之后的编号本来就无从保存）；`[X]` → `[x]`。
+ */
+function readListElement(text: string, at: number): { markdown: string; end: number } | null {
+	const head = readTag(text, at);
+	if (!head || head.closing || (head.name !== 'ul' && head.name !== 'ol')) return null;
+
+	const ordered = head.name === 'ol';
+	const start = (ordered ? readStartNumber(head.raw) : null) ?? 1;
+	const lines: string[] = [];
+	let count = 0;
+	let pos = at + head.raw.length;
+
+	while (true) {
+		pos = skipHtmlWhitespace(text, pos);
+		const tag = readTag(text, pos);
+
+		if (tag && tag.closing && tag.name === head.name) {
+			pos += tag.raw.length;
+			break;
+		}
+		// `<li>` 之外的任何东西都算畸形：不猜、不跳过
+		if (!tag || tag.closing || tag.name !== 'li') return null;
+
+		const inner = sliceLiContent(text, pos + tag.raw.length);
+		if (!inner) return null;
+
+		const parsed = parseLiContent(inner.raw);
+		if (!parsed) return null;
+
+		const [first = '', ...rest] = parsed.lines;
+		const marker = ordered ? `${start + count}. ` : '- ';
+		const box = parsed.task === null ? '' : parsed.task ? '[x] ' : '[ ] ';
+		// 项内容走同一条行内还原（`**粗体**` / `==高亮==` / 裸实体都在这里落回原文）
+		const line = (marker + box + convertInlineBack(first)).trimEnd();
+		lines.push(line, ...rest.map((nested) => NESTED_INDENT + nested));
+
+		count += 1;
+		pos = inner.end;
+	}
+
+	if (count === 0) return null;
+	return { markdown: lines.join('\n'), end: pos };
+}
+
+/**
+ * 从 `<ul>` / `<ol>` 开标签起吃掉整个元素（按同名标签深度配对）。
+ *
+ * 列表解析失败时用它把**整段**原样透传：逐标签往下走会让内层长得像列表的片段被单独转换，
+ * 那样产物既不是原文、也不是合法列表。找不到配对闭标签时只吃掉开标签（与既有的未配对标签同待遇）。
+ */
+function skipElement(text: string, at: number, name: string): number {
+	const opening = readTag(text, at);
+	if (!opening) return at + 1;
+
+	let depth = 1;
+	let pos = at + opening.raw.length;
+
+	while (pos < text.length) {
+		const next = text.indexOf('<', pos);
+		if (next < 0) break;
+
+		const tag = readTag(text, next);
+		if (!tag) {
+			pos = next + 1;
+			continue;
+		}
+		if (tag.name === name) {
+			if (tag.closing) {
+				depth -= 1;
+				if (depth === 0) return next + tag.raw.length;
+			} else {
+				depth += 1;
+			}
+		}
+		pos = next + tag.raw.length;
+	}
+
+	return at + opening.raw.length;
+}
+
 /**
  * Unpopup：把块内内容还原成 Obsidian 支持的 Markdown。
  *
@@ -288,6 +686,20 @@ function convertInlineBack(text: string): string {
 		out += decodeEntities(text.slice(index, at));
 
 		const tag = readTag(text, at);
+		if (tag && !tag.closing && (tag.name === 'ul' || tag.name === 'ol')) {
+			const list = readListElement(text, at);
+			if (list) {
+				out += list.markdown;
+				index = list.end;
+				continue;
+			}
+			// 畸形列表：整段原样保留，不猜、不修复（非破坏性原则）
+			const end = skipElement(text, at, tag.name);
+			out += text.slice(at, end);
+			index = end;
+			continue;
+		}
+
 		const rule = tag ? BACKWARD_RULES[tag.name] : undefined;
 		if (!tag || !rule || tag.closing) {
 			// 裸 `<`、未知标签、孤立的闭标签：都原样保留

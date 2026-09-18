@@ -299,6 +299,72 @@ test('选区落在已有 HTML 块内时提示先 unpopup', () => {
 	);
 });
 
+// —— Popup：列表选区 ——
+//
+// 列表要转成真正的 HTML 列表（`- a<br>- b` 在编辑器与弹窗里都不会成列表）。
+// 关键回归点是「单行选区」：正文含块级元素时外壳不能用 p，否则解析器会把 p 闭合、再补一个空 p，
+// 块命中的是那个空元素 → 没有放大图标（幽灵块）。命令层因此按多行形态走，并给 p 加一条守卫。
+
+/** 任务项的固定 markup，只把勾选态与内容留成参数。 */
+const taskLi = (checked, content) =>
+	`<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox"${checked ? ' checked' : ''} disabled> ${content}</li>`;
+
+test('Popup 多行选区里的无序列表生成 ul', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('- a\n- b');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<div>\n<ul><li>a</li><li>b</li></ul>\n</div>');
+	assert.deepEqual([...notices], [], '成功路径不该有提示');
+});
+
+test('Popup 多行选区里的有序列表生成 ol', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('1. a\n2. b');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<div>\n<ol><li>a</li><li>b</li></ol>\n</div>');
+});
+
+test('Popup 多行选区里的任务列表生成复选框', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('- [ ] a\n- [x] b');
+	runCommand(host, POPUP, editor);
+	assert.equal(
+		editor.getValue(),
+		`<div>\n<ul class="contains-task-list">${taskLi(false, 'a')}${taskLi(true, 'b')}</ul>\n</div>`,
+	);
+});
+
+test('Popup 单行列表选区改走多行标签（不能落到 p 外壳）', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('- a');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<div>\n<ul><li>a</li></ul>\n</div>', '默认单行标签是 p，这里必须用 div');
+	assert.deepEqual([...notices], [], '这是正常路径，不该有提示');
+});
+
+test('多行标签被显式设成 p 时，含列表的正文被拒绝且一个字节都不改', () => {
+	const host = createHost({ supportedTags: 'div, p', multiLineTag: 'p' });
+	registerCommands(host);
+	expectRejected(
+		host,
+		POPUP,
+		createEditor('- a\n- b'),
+		t('Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".'),
+	);
+});
+
+test('单行标签是 p 时，不含列表的单行普通文本照旧用 p', () => {
+	const host = createHost({ supportedTags: 'div, p' });
+	registerCommands(host);
+	const editor = createEditor('hello');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<p>\nhello\n</p>', 'p 守卫只作用于含块级元素的正文');
+});
+
 // —— Unpopup ——
 
 test('Unpopup 把块内 HTML 还原成 Markdown', () => {
@@ -409,4 +475,22 @@ test('单行选区的 Popup → Unpopup 往返回到原文', () => {
 	const restored = createEditor(wrapped);
 	runCommand(host, UNPOPUP, restored);
 	assert.equal(restored.getValue(), original, '往返应回到原文');
+});
+
+test('列表的 Popup → Unpopup 往返回到原文', () => {
+	const host = createHost();
+	registerCommands(host);
+	for (const original of ['- a\n- b', '1. a\n2. b', '- [x] a\n- [ ] b', '- a\n  - b']) {
+		const editor = createEditor(original);
+		runCommand(host, POPUP, editor);
+		const wrapped = editor.getValue();
+		assert.notEqual(wrapped, original, `Popup 应该改写了原文，输入: ${JSON.stringify(original)}`);
+		const restored = createEditor(wrapped);
+		runCommand(host, UNPOPUP, restored);
+		assert.equal(
+			restored.getValue(),
+			original,
+			`往返应回到原文，输入: ${JSON.stringify(original)}`,
+		);
+	}
 });

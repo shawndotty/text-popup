@@ -17,7 +17,7 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } =
+const { findOuterPopupElement, hasBlockBody, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } =
 	await jiti.import('../src/convert.ts');
 
 /** 断言时统一带上输入，失败信息里能直接看到是哪条样例。 */
@@ -208,6 +208,196 @@ test('首尾各一个换行被去掉（标签独占一行的那两个换行）',
 
 test('markdownToHtml → htmlToMarkdown 往返后回到原文', () => {
 	const cases = ['plain', 'a **b**', 'a\n\nb', '**粗** 与 `code`', 'a\nb\n\nc', '==高== ~~删~~'];
+	for (const input of cases) {
+		const html = markdownToHtml(input, 'div');
+		assert.equal(htmlToMarkdown(innerOf(html)), input, `往返失败，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+// —— 块级转换：Markdown 列表 → HTML 列表 ——
+//
+// 列表是唯一一个「留原文就彻底失效」的块级语法：`- a<br>- b` 在编辑器与弹窗里都不会成列表。
+// 因此它被特判成真正的 HTML 列表，markup 照抄核心（`ul.contains-task-list` / `li.task-list-item` /
+// `input.task-list-item-checkbox`），项内容仍走同一条 convertInline。
+// 判据刻意收紧（标记后必须空白或行尾、分隔线整行排除）：宁可漏判也不误判。
+
+/** 任务项的固定 markup，只把勾选态与内容留成参数。 */
+const taskLi = (checked, content) =>
+	`<li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox"${checked ? ' checked' : ''} disabled> ${content}</li>`;
+
+/** 只关心正文（外层标签由命令层决定）。 */
+function body(text) {
+	return innerOf(markdownToHtml(text, 'div'));
+}
+
+test('无序列表转成 ul：两项、三项、单项、空项', () => {
+	eq(body('- a\n- b'), '<ul><li>a</li><li>b</li></ul>', '- a\\n- b');
+	eq(body('- a\n- b\n- c'), '<ul><li>a</li><li>b</li><li>c</li></ul>', '三项');
+	eq(body('- a'), '<ul><li>a</li></ul>', '单项（单行选区）');
+	eq(body('-'), '<ul><li></li></ul>', '空项');
+});
+
+test('* 与 + 与 - 同属无序，混用标记也算同一个列表', () => {
+	eq(body('* a\n* b'), '<ul><li>a</li><li>b</li></ul>', '* 标记');
+	eq(body('+ a\n+ b'), '<ul><li>a</li><li>b</li></ul>', '+ 标记');
+	eq(body('* a\n+ b'), '<ul><li>a</li><li>b</li></ul>', '混用标记');
+});
+
+test('标记后没有空白的不算列表', () => {
+	eq(body('-test'), '-test', '-test');
+	eq(body('1.test'), '1.test', '1.test');
+	eq(body('*斜体*'), '<em>斜体</em>', '*斜体*（落在行内强调上）');
+});
+
+test('分隔线按原文保留，不转列表', () => {
+	eq(body('- - -'), '- - -', '- - -');
+	eq(body('* * *'), '* * *', '* * *');
+	eq(body('---'), '---', '---');
+});
+
+test('有序列表转成 ol，标记 . 与 ) 都认', () => {
+	eq(body('1. a\n2. b'), '<ol><li>a</li><li>b</li></ol>', '1. 标记');
+	eq(body('1) a\n2) b'), '<ol><li>a</li><li>b</li></ol>', '1) 标记');
+});
+
+test('首项编号不是 1 时带 start，中间编号归一', () => {
+	eq(body('3. a\n4. b'), '<ol start="3"><li>a</li><li>b</li></ol>', '3. 开头');
+	eq(body('1. a\n5. b'), '<ol><li>a</li><li>b</li></ol>', '中间编号 5 被归一');
+});
+
+test('任务列表：未勾 / 已勾（[x] 与 [X]）的类名与属性', () => {
+	eq(
+		body('- [ ] a\n- [x] b'),
+		`<ul class="contains-task-list">${taskLi(false, 'a')}${taskLi(true, 'b')}</ul>`,
+		'未勾 + 已勾',
+	);
+	eq(body('- [X] c'), `<ul class="contains-task-list">${taskLi(true, 'c')}</ul>`, '[X] 等价于 [x]');
+});
+
+test('层里只要有一个任务项，整个列表就带 contains-task-list', () => {
+	eq(
+		body('- a\n- [ ] b'),
+		`<ul class="contains-task-list"><li>a</li>${taskLi(false, 'b')}</ul>`,
+		'普通项 + 任务项',
+	);
+});
+
+test('[x] 后没有空白的不算任务项', () => {
+	eq(body('- [x]a'), '<ul><li>[x]a</li></ul>', '- [x]a');
+});
+
+test('列表与普通行混排：两侧各一个 br，列表压在正文那一行里', () => {
+	eq(
+		body('text\n- a\n- b\nafter'),
+		'text<br><ul><li>a</li><li>b</li></ul><br>after',
+		'text\\n- a\\n- b\\nafter',
+	);
+	eq(body('**粗**\n- a'), '<strong>粗</strong><br><ul><li>a</li></ul>', '行内标记 + 列表');
+});
+
+test('空行打断列表，空行的那个 br 照旧保留', () => {
+	// 空行本身贡献一个 <br>（与既有 `a\n\nb` → `a<br><br>b` 同一条规则），
+	// 于是两个列表之间是两个 <br> —— 只有这样 Unpopup 才能把空行原样还回去。
+	eq(body('- a\n\n- b'), '<ul><li>a</li></ul><br><br><ul><li>b</li></ul>', '- a\\n\\n- b');
+});
+
+test('同层换 kind 时另起一个同级列表', () => {
+	eq(body('- a\n1. b'), '<ul><li>a</li></ul><ol><li>b</li></ol>', '- a\\n1. b');
+});
+
+test('列表项里的行内标记走同一条转换', () => {
+	eq(body('- **粗** 与 ==高亮=='), '<ul><li><strong>粗</strong> 与 <mark>高亮</mark></li></ul>', '粗体与高亮');
+	eq(body('- `x < y`'), '<ul><li><code>x &lt; y</code></li></ul>', '项内行内代码');
+	eq(body('- a < b'), '<ul><li>a &lt; b</li></ul>', '项内裸尖括号');
+});
+
+test('嵌套列表：两层与三层', () => {
+	eq(body('- a\n  - b'), '<ul><li>a<ul><li>b</li></ul></li></ul>', '两层');
+	eq(body('- a\n  - b\n    - c'), '<ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li></ul>', '三层');
+});
+
+test('缩进回退时回到上层继续出同级项', () => {
+	eq(body('- a\n  - b\n- c'), '<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>', '- a\\n  - b\\n- c');
+});
+
+test('子层同缩进换 kind 时变成兄弟层', () => {
+	eq(
+		body('- a\n  - b\n  1. c'),
+		'<ul><li>a<ul><li>b</li></ul><ol><li>c</li></ol></li></ul>',
+		'子层换 kind',
+	);
+});
+
+// —— 单行列表选区判据（命令层据此绕开 p 外壳） ——
+
+test('hasBlockBody：正文里会不会出现块级元素', () => {
+	for (const input of ['- a', '1. a', '- [ ] a', 'text\n- a', '- a\n- b', '  - a']) {
+		assert.equal(hasBlockBody(input), true, `应判为含块级元素，输入: ${JSON.stringify(input)}`);
+	}
+	for (const input of ['a', 'a\nb', '', '   ', '-test', '*斜体*', '- - -', '1.test', '---']) {
+		assert.equal(hasBlockBody(input), false, `不该判为含块级元素，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+test('不变量：单行且不含块级元素 ⇔ 正文能用 p 装（没有 br、也没有列表）', () => {
+	const inputs = ['a', 'a\nb', '- a', '- a\n- b', 'text\n- a', '1. a', 'plain', 'a\n\nb', '-test'];
+	for (const input of inputs) {
+		const generated = body(input);
+		const pSafe = isSingleLine(input) && !hasBlockBody(input);
+		assert.equal(
+			pSafe,
+			!generated.includes('<br>') && !generated.includes('<ul') && !generated.includes('<ol'),
+			`p 可用性与生成结果不一致，输入: ${JSON.stringify(input)}`,
+		);
+	}
+});
+
+// —— 反向：HTML 列表 → Markdown 列表 ——
+
+test('反向：ul / ol / ol start 还原成 - 与连续编号', () => {
+	eq(htmlToMarkdown('<ul><li>a</li><li>b</li></ul>'), '- a\n- b', '<ul>');
+	eq(htmlToMarkdown('<ol><li>a</li><li>b</li></ol>'), '1. a\n2. b', '<ol>');
+	eq(htmlToMarkdown('<ol start="3"><li>a</li><li>b</li></ol>'), '3. a\n4. b', '<ol start="3">');
+});
+
+test('反向：任务项按 checked 还原，类名与属性顺序都不影响', () => {
+	eq(
+		htmlToMarkdown(`<ul class="contains-task-list">${taskLi(false, 'a')}${taskLi(true, 'b')}</ul>`),
+		'- [ ] a\n- [x] b',
+		'本插件生成的 markup',
+	);
+	eq(htmlToMarkdown('<ul><li><input type="checkbox" checked> a</li></ul>'), '- [x] a', '手写极简 markup');
+});
+
+test('反向：嵌套列表补 2 空格缩进（li 按深度配对）', () => {
+	eq(htmlToMarkdown('<ul><li>a<ul><li>b</li></ul></li></ul>'), '- a\n  - b', '两层');
+	eq(
+		htmlToMarkdown('<ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li></ul>'),
+		'- a\n  - b\n    - c',
+		'三层',
+	);
+});
+
+test('反向：项里的行内标记照常还原', () => {
+	eq(
+		htmlToMarkdown('<ul><li><strong>粗</strong> 与 <mark>高</mark></li></ul>'),
+		'- **粗** 与 ==高==',
+		'项内行内标签',
+	);
+});
+
+test('反向：畸形列表整段原样保留（不猜、不修复）', () => {
+	eq(htmlToMarkdown('<ul>a</ul>'), '<ul>a</ul>', '没有 li');
+	eq(htmlToMarkdown('<ul><li>a</li>'), '<ul><li>a</li>', '缺闭标签');
+	eq(
+		htmlToMarkdown('<ul><li>a<ul><li>b</li></ul>c</li></ul>'),
+		'<ul><li>a<ul><li>b</li></ul>c</li></ul>',
+		'嵌套列表之后还有正文',
+	);
+});
+
+test('列表的 markdownToHtml → htmlToMarkdown 往返回到原文', () => {
+	const cases = ['- a\n- b', '1. a\n2. b', '- [x] a\n- [ ] b', '- a\n  - b', 'text\n- a\nafter', '- a\n\n- b'];
 	for (const input of cases) {
 		const html = markdownToHtml(input, 'div');
 		assert.equal(htmlToMarkdown(innerOf(html)), input, `往返失败，输入: ${JSON.stringify(input)}`);
