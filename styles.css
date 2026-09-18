@@ -235,6 +235,12 @@
 	height: var(--icon-s, 16px);
 }
 
+/* Remove Link Underline */
+
+.mod-text-popup .text-popup-text .external-link {
+	text-decoration: none;
+}
+
 /* 设置页：颜色项旁的「当前值」提示 */
 
 .text-popup-setting-status {
