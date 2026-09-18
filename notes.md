@@ -1,1 +1,1 @@
-- add support for callout, code and math block 
+- add commands and context menu to popup and unpopup selected text
