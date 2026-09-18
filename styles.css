@@ -156,6 +156,13 @@
 	padding: 6px 12px;
 }
 
+/* iframe 容器宽度控制 */
+
+.mod-text-popup .text-popup-text.is-rich:has(iframe) {
+	width: 100%;
+	min-width: 100%;
+}
+
 /* 底部控制条：字号 / 缩放 / 恢复默认 */
 
 .mod-text-popup .text-popup-controls {
