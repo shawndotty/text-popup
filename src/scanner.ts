@@ -9,6 +9,7 @@ import {
 	extractRichSource,
 	extractText,
 } from './extract';
+import { t } from './lang/helpers';
 import { TextPopupModal } from './modal';
 import type { TextPopupBody, TextPopupSource } from './modal';
 import type { TextPopupSettings } from './settings';
@@ -35,7 +36,6 @@ const BLOCK_SELECTOR = '.cm-embed-block';
 const ACTIONS_SELECTOR = ':scope > .embed-actions';
 const ACTION_CLASS = 'text-popup-action';
 const FLAIR_ACTION_CLASS = 'text-popup-flair-action';
-const ACTION_LABEL = '放大显示文字';
 
 /**
  * 第二处注入点：普通围栏代码块右上角的「语言名 / 复制」chip。
@@ -387,7 +387,9 @@ function createActionEl(
 	const actionEl = inline ? parent.createSpan({ cls }) : parent.createDiv({ cls });
 	actionEl.setAttribute('role', 'button');
 	actionEl.setAttribute('tabindex', '0');
-	actionEl.setAttribute('aria-label', ACTION_LABEL);
+	// 惰性取文案：写成模块级 `const ACTION_LABEL = t('Magnify text')` 会把语言冻结在加载时刻，
+	// 改语言后已注入的按钮不会跟着变（Plan-20260918-104304 的风险 K3）。
+	actionEl.setAttribute('aria-label', t('Magnify text'));
 	setIcon(actionEl, 'maximize-2');
 
 	const open = (evt?: Event): void => {

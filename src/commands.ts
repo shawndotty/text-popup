@@ -13,6 +13,7 @@ import type { App, Command, Editor, EventRef } from 'obsidian';
 import { isBlockLevelTag, scanTextBlocks } from './blocks';
 import type { TextBlockRegion } from './blocks';
 import { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, markdownToHtml } from './convert';
+import { t } from './lang/helpers';
 import type { TextPopupSettings } from './settings';
 
 /** 命令层只需要插件的这几项能力，避免与 main.ts 形成循环依赖（与 scanner.ts 的 TextPopupHost 同一手法）。 */
@@ -29,7 +30,7 @@ export function registerCommands(host: CommandHost): void {
 	// 顺带白拿核心合成的 checkCallback 守卫：没有活动编辑器 / 阅读视图 / 焦点在标题或属性区都不触发。
 	host.addCommand({
 		id: 'popup-selected-text',
-		name: 'Popup Selected Text',
+		name: t('Popup selected text'),
 		icon: 'maximize-2',
 		editorCheckCallback: (checking, editor) => {
 			if (!editor.somethingSelected()) return false;
@@ -40,7 +41,7 @@ export function registerCommands(host: CommandHost): void {
 
 	host.addCommand({
 		id: 'unpopup-selected-text',
-		name: 'Unpopup Selected Text',
+		name: t('Unpopup selected text'),
 		icon: 'minimize-2',
 		editorCheckCallback: (checking, editor) => {
 			if (!editor.somethingSelected()) return false;
@@ -54,13 +55,13 @@ export function registerCommands(host: CommandHost): void {
 		host.app.workspace.on('editor-menu', (menu, editor) => {
 			if (!editor.somethingSelected()) return;
 			menu.addItem((item) => {
-				item.setTitle('Popup Selected Text')
+				item.setTitle(t('Popup selected text'))
 					.setIcon('maximize-2')
 					.setSection('selection')
 					.onClick(() => popupSelection(host, editor));
 			});
 			menu.addItem((item) => {
-				item.setTitle('Unpopup Selected Text')
+				item.setTitle(t('Unpopup selected text'))
 					.setIcon('minimize-2')
 					.setSection('selection')
 					.onClick(() => unpopupSelection(host, editor));
@@ -72,24 +73,24 @@ export function registerCommands(host: CommandHost): void {
 /** Popup：把选中的 Markdown 文本转成可放大的 HTML 块。 */
 function popupSelection(host: CommandHost, editor: Editor): void {
 	if (editor.listSelections().length > 1) {
-		new Notice('请在单光标下使用');
+		new Notice(t('Please use a single cursor.'));
 		return;
 	}
 
 	const tag = resolvePopupTag(host.settings);
 	if (!tag) {
-		new Notice('包裹标签不可用，请在设置里检查「包裹标签」与「支持的标签」');
+		new Notice(t('Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.'));
 		return;
 	}
 
 	const range = readSelectedLines(editor);
 	const text = editor.getRange(range.from, range.to);
 	if (!text.trim()) {
-		new Notice('选中的是空行，没有可转换的内容');
+		new Notice(t('The selection is empty; nothing to convert.'));
 		return;
 	}
 	if (hasTooDeepIndent(text)) {
-		new Notice('选区缩进太深，会被当成代码块，无法生成可放大的块');
+		new Notice(t('The selection is indented too deeply and would be treated as a code block.'));
 		return;
 	}
 
@@ -98,11 +99,11 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 		overlaps(region, range.from.line, range.to.line),
 	);
 	if (clash && clash.kind !== 'html') {
-		new Notice('选区位于代码块、标注或数学块内，无法转换');
+		new Notice(t('The selection is inside a code block, callout, or math block.'));
 		return;
 	}
 	if (clash) {
-		new Notice('选区里已经有 Popup 块，请先用 Unpopup Selected Text');
+		new Notice(t('The selection already contains a popup block; use the unpopup command first.'));
 		return;
 	}
 
@@ -115,7 +116,7 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 /** Unpopup：去掉外层标签，并把块内的 HTML 还原成 Obsidian 支持的 Markdown。 */
 function unpopupSelection(host: CommandHost, editor: Editor): void {
 	if (editor.listSelections().length > 1) {
-		new Notice('请在单光标下使用');
+		new Notice(t('Please use a single cursor.'));
 		return;
 	}
 
@@ -124,11 +125,11 @@ function unpopupSelection(host: CommandHost, editor: Editor): void {
 		(region) => region.kind === 'html' && overlaps(region, range.from.line, range.to.line),
 	);
 	if (hits.length === 0) {
-		new Notice('选区不在可放大的 HTML 块里');
+		new Notice(t('The selection is not inside a magnifiable HTML block.'));
 		return;
 	}
 	if (hits.length > 1) {
-		new Notice('选区跨了多个放大块，一次只能还原一个');
+		new Notice(t('The selection spans multiple popup blocks; only one can be restored at a time.'));
 		return;
 	}
 
@@ -137,7 +138,11 @@ function unpopupSelection(host: CommandHost, editor: Editor): void {
 
 	const element = findOuterPopupElement(region.raw, host.settings.supportedTags);
 	if (!element) {
-		new Notice('没找到可还原的外层标签，只支持「支持的标签」里的块级标签');
+		new Notice(
+			t(
+				'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.',
+			),
+		);
 		return;
 	}
 

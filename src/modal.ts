@@ -1,4 +1,5 @@
 import { App, Component, MarkdownRenderer, Modal, setIcon } from 'obsidian';
+import { t } from './lang/helpers';
 import {
 	FONT_SIZE_MAX,
 	FONT_SIZE_MIN,
@@ -142,7 +143,7 @@ export class TextPopupModal extends Modal {
 
 	/** 只有一条时不加序号：标题与 1.0.2 完全一致。 */
 	private updateTitle(): void {
-		const name = this.source.sourceName || '放大显示';
+		const name = this.source.sourceName || t('Magnified view');
 		const total = this.source.size;
 		this.titleEl.setText(total > 1 ? `${name} · ${this.index + 1} / ${total}` : name);
 	}
@@ -196,18 +197,22 @@ export class TextPopupModal extends Modal {
 		const controlsEl = parentEl.createDiv({ cls: 'text-popup-controls' });
 
 		const fontGroupEl = controlsEl.createDiv({ cls: 'text-popup-control-group' });
-		fontGroupEl.createSpan({ cls: 'text-popup-control-label', text: '字号' });
-		this.createControlButton(fontGroupEl, 'minus', '减小字号', () => this.stepFontSize(-1));
+		fontGroupEl.createSpan({ cls: 'text-popup-control-label', text: t('Font size') });
+		this.createControlButton(fontGroupEl, 'minus', t('Decrease font size'), () =>
+			this.stepFontSize(-1),
+		);
 		this.fontSizeValueEl = fontGroupEl.createSpan({ cls: 'text-popup-control-value' });
-		this.createControlButton(fontGroupEl, 'plus', '增大字号', () => this.stepFontSize(1));
+		this.createControlButton(fontGroupEl, 'plus', t('Increase font size'), () =>
+			this.stepFontSize(1),
+		);
 
 		const zoomGroupEl = controlsEl.createDiv({ cls: 'text-popup-control-group' });
-		zoomGroupEl.createSpan({ cls: 'text-popup-control-label', text: '缩放' });
-		this.createControlButton(zoomGroupEl, 'zoom-out', '整体缩小', () => this.stepZoom(-1));
+		zoomGroupEl.createSpan({ cls: 'text-popup-control-label', text: t('Zoom') });
+		this.createControlButton(zoomGroupEl, 'zoom-out', t('Zoom out'), () => this.stepZoom(-1));
 		this.zoomValueEl = zoomGroupEl.createSpan({ cls: 'text-popup-control-value' });
-		this.createControlButton(zoomGroupEl, 'zoom-in', '整体放大', () => this.stepZoom(1));
+		this.createControlButton(zoomGroupEl, 'zoom-in', t('Zoom in'), () => this.stepZoom(1));
 
-		this.createControlButton(controlsEl, 'rotate-ccw', '恢复默认', () => this.resetSize());
+		this.createControlButton(controlsEl, 'rotate-ccw', t('Reset'), () => this.resetSize());
 	}
 
 	private createControlButton(

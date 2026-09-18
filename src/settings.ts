@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type { DropdownComponent } from 'obsidian';
 import { isBlockLevelTag } from './blocks';
+import { t } from './lang/helpers';
 import type TextPopupPlugin from './main';
 import { refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
@@ -118,8 +119,8 @@ export class TextPopupSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('启用放大图标')
-			.setDesc('在实时预览中，为支持的区块显示放大图标。')
+			.setName(t('Enable magnifier icon'))
+			.setDesc(t('Show a magnifier icon for supported blocks in Live Preview.'))
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
 					this.plugin.settings.enabled = value;
@@ -131,25 +132,29 @@ export class TextPopupSettingTab extends PluginSettingTab {
 		this.addBlockKindSetting(
 			containerEl,
 			'code',
-			'放大代码块',
-			'为实时预览里的围栏代码块显示放大图标。',
+			t('Magnify code blocks'),
+			t('Show a magnifier icon for fenced code blocks in Live Preview.'),
 		);
 		this.addBlockKindSetting(
 			containerEl,
 			'callout',
-			'放大 Callout',
-			'为实时预览里的标注（Callout）显示放大图标。',
+			t('Magnify callouts'),
+			t('Show a magnifier icon for callouts in Live Preview.'),
 		);
 		this.addBlockKindSetting(
 			containerEl,
 			'math',
-			'放大数学块',
-			'为实时预览里的 $$ 数学块显示放大图标。',
+			t('Magnify math blocks'),
+			t('Show a magnifier icon for $$ math blocks in Live Preview.'),
 		);
 
 		new Setting(containerEl)
-			.setName('渲染 HTML 与 Markdown')
-			.setDesc('在弹窗内按语法渲染块里的 HTML 与 Markdown。关闭后按纯文本原样显示。')
+			.setName(t('Render HTML and Markdown'))
+			.setDesc(
+				t(
+					"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
+				),
+			)
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.renderRichText).onChange(async (value) => {
 					this.plugin.settings.renderRichText = value;
@@ -159,23 +164,27 @@ export class TextPopupSettingTab extends PluginSettingTab {
 
 		this.addColorSetting(
 			containerEl,
-			'弹窗背景色',
-			'留空则跟随主题背景色。',
+			t('Popup background color'),
+			t('Leave empty to follow the theme background color.'),
 			'popupBackgroundColor',
 			'#2b2b2b',
 		);
 
 		this.addColorSetting(
 			containerEl,
-			'弹窗文字颜色',
-			'留空则跟随主题文字颜色。',
+			t('Popup text color'),
+			t('Leave empty to follow the theme text color.'),
 			'popupTextColor',
 			'#dcddde',
 		);
 
 		new Setting(containerEl)
-			.setName('弹窗字号')
-			.setDesc('弹窗内文字的默认字号，单位为像素。弹窗内还可以临时调整。')
+			.setName(t('Popup font size'))
+			.setDesc(
+				t(
+					'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+				),
+			)
 			.addSlider((slider) =>
 				slider
 					.setLimits(FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_STEP)
@@ -188,8 +197,12 @@ export class TextPopupSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('支持的标签')
-			.setDesc('只对手写的块级 HTML 生效，用逗号分隔，例如 div, p。修改后立即生效，不需要改代码。')
+			.setName(t('Supported tags'))
+			.setDesc(
+				t(
+					'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
+				),
+			)
 			.addText((text) =>
 				text
 					.setPlaceholder(DEFAULT_TAGS.join(', '))
@@ -217,8 +230,12 @@ export class TextPopupSettingTab extends PluginSettingTab {
 	 */
 	private addPopupTagSetting(containerEl: HTMLElement): void {
 		const setting = new Setting(containerEl)
-			.setName('包裹标签')
-			.setDesc('转换命令用哪个块级标签包裹选中的文本；只有块级标签能生成可放大的块。');
+			.setName(t('Wrapper tag'))
+			.setDesc(
+				t(
+					'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.',
+				),
+			);
 
 		setting.addDropdown((dropdown) => {
 			// 当前值一定留在选项里：否则 supportedTags 被改空后下拉框会显示成空白
@@ -264,7 +281,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 	): void {
 		let statusEl: HTMLElement | null = null;
 
-		const describe = (value: string): string => (value ? value : '跟随主题');
+		const describe = (value: string): string => (value ? value : t('Follow theme'));
 		const render = (value: string): void => {
 			if (statusEl) statusEl.setText(describe(value));
 		};
@@ -281,7 +298,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 		});
 
 		setting.addButton((button) =>
-			button.setButtonText('跟随主题').onClick(async () => {
+			button.setButtonText(t('Follow theme')).onClick(async () => {
 				this.plugin.settings[key] = '';
 				await this.plugin.saveSettings();
 				render('');

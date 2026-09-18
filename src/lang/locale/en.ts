@@ -1,0 +1,75 @@
+/**
+ * 英文词典 —— 既是 key 的**基准**（`keyof typeof en` 就是 `t()` 的参数类型），
+ * 也是所有语言的**最终回退**（见 helpers.ts）。
+ *
+ * 约定：键与值相同；面向用户的文案一律 sentence case（`AGENTS.md` 的 UX & copy guidelines）。
+ * 新增文案时先加在这里，再补 zh-cn / zh-tw；非英文词典是 `Partial<typeof en>`，可以增量补。
+ */
+export default {
+	// —— 设置页 ——
+	'Enable magnifier icon': 'Enable magnifier icon',
+	'Show a magnifier icon for supported blocks in Live Preview.':
+		'Show a magnifier icon for supported blocks in Live Preview.',
+	'Magnify code blocks': 'Magnify code blocks',
+	'Show a magnifier icon for fenced code blocks in Live Preview.':
+		'Show a magnifier icon for fenced code blocks in Live Preview.',
+	'Magnify callouts': 'Magnify callouts',
+	'Show a magnifier icon for callouts in Live Preview.':
+		'Show a magnifier icon for callouts in Live Preview.',
+	'Magnify math blocks': 'Magnify math blocks',
+	'Show a magnifier icon for $$ math blocks in Live Preview.':
+		'Show a magnifier icon for $$ math blocks in Live Preview.',
+	'Render HTML and Markdown': 'Render HTML and Markdown',
+	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
+		"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
+	'Popup background color': 'Popup background color',
+	'Leave empty to follow the theme background color.':
+		'Leave empty to follow the theme background color.',
+	'Popup text color': 'Popup text color',
+	'Leave empty to follow the theme text color.': 'Leave empty to follow the theme text color.',
+	'Popup font size': 'Popup font size',
+	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
+		'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+	'Supported tags': 'Supported tags',
+	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
+		'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
+	'Wrapper tag': 'Wrapper tag',
+	'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.':
+		'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.',
+	'Follow theme': 'Follow theme',
+
+	// —— 命令名 · 右键菜单项 ——
+	'Popup selected text': 'Popup selected text',
+	'Unpopup selected text': 'Unpopup selected text',
+
+	// —— Notice 提示 ——
+	'Please use a single cursor.': 'Please use a single cursor.',
+	'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.':
+		'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.',
+	'The selection is empty; nothing to convert.': 'The selection is empty; nothing to convert.',
+	'The selection is indented too deeply and would be treated as a code block.':
+		'The selection is indented too deeply and would be treated as a code block.',
+	'The selection is inside a code block, callout, or math block.':
+		'The selection is inside a code block, callout, or math block.',
+	'The selection already contains a popup block; use the unpopup command first.':
+		'The selection already contains a popup block; use the unpopup command first.',
+	'The selection is not inside a magnifiable HTML block.':
+		'The selection is not inside a magnifiable HTML block.',
+	'The selection spans multiple popup blocks; only one can be restored at a time.':
+		'The selection spans multiple popup blocks; only one can be restored at a time.',
+	'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.':
+		'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.',
+
+	// —— 弹窗控制条与标题兜底 ——
+	'Font size': 'Font size',
+	'Decrease font size': 'Decrease font size',
+	'Increase font size': 'Increase font size',
+	Zoom: 'Zoom',
+	'Zoom out': 'Zoom out',
+	'Zoom in': 'Zoom in',
+	Reset: 'Reset',
+	'Magnified view': 'Magnified view',
+
+	// —— 放大图标的 aria-label ——
+	'Magnify text': 'Magnify text',
+};
