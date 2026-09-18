@@ -1,1 +1,1 @@
-- add commands and context menu to popup and unpopup selected text
+- Add multi languages support
