@@ -32,9 +32,12 @@ const zhTW: Partial<typeof en> = {
 	'Supported tags': '支援的標籤',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
 		'只對手寫的區塊層級 HTML 生效，以逗號分隔，例如 div, p。修改後立即生效，不需要改程式碼。',
-	'Wrapper tag': '包裹標籤',
-	'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.':
-		'轉換命令用哪個區塊層級標籤包裹選取的文字；只有區塊層級標籤能產生可放大的區塊。',
+	'Single-line wrapper tag': '單行文字包裹標籤',
+	'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.':
+		'選取範圍只有一行時，轉換命令用哪個區塊層級標籤包裹文字；只有區塊層級標籤能產生可放大的區塊。',
+	'Multi-line wrapper tag': '多行文字包裹標籤',
+	'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.':
+		'選取範圍含換行（多行）時，轉換命令用哪個區塊層級標籤包裹文字；只有區塊層級標籤能產生可放大的區塊。',
 	'Follow theme': '跟隨主題',
 
 	// —— 命令名 · 右鍵選單項目 ——
@@ -43,8 +46,8 @@ const zhTW: Partial<typeof en> = {
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '請在單游標下使用',
-	'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.':
-		'包裹標籤不可用，請在設定裡檢查「包裹標籤」與「支援的標籤」',
+	'Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".':
+		'包裹標籤不可用，請在設定裡檢查「單行文字包裹標籤」「多行文字包裹標籤」與「支援的標籤」',
 	'The selection is empty; nothing to convert.': '選取的是空行，沒有可轉換的內容',
 	'The selection is indented too deeply and would be treated as a code block.':
 		'選取範圍縮排太深，會被當成程式碼區塊，無法產生可放大的區塊',

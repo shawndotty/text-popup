@@ -17,7 +17,7 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, markdownToHtml } =
+const { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } =
 	await jiti.import('../src/convert.ts');
 
 /** 断言时统一带上输入，失败信息里能直接看到是哪条样例。 */
@@ -61,6 +61,50 @@ test('正文压在单行里：除包裹标签自身那两个换行外不含裸�
 	for (const input of ['plain', 'a\nb', 'a\n\nb', 'a\nb\n\nc', '**粗** 与 `code`']) {
 		const body = innerOf(markdownToHtml(input, 'div'));
 		assert.ok(!body.includes('\n'), `正文不应含裸换行，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+// —— 单行判定（命令层据此选单行 / 多行包裹标签） ——
+
+test('去尾空行后只剩一行时判为单行', () => {
+	for (const input of ['a', 'a\n', 'a\n\n', 'a\r\n', 'a\r']) {
+		assert.equal(isSingleLine(input), true, `应判为单行，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+test('含内部换行时判为多行', () => {
+	for (const input of ['a\nb', 'a\nb\n', 'a\n\nb', 'a  \nb']) {
+		assert.equal(isSingleLine(input), false, `应判为多行，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+test('空串与纯空白判为单行（命令层先拒空选区，这里只钉行为）', () => {
+	assert.equal(isSingleLine(''), true, '空串');
+	assert.equal(isSingleLine('   '), true, '纯空格');
+	assert.equal(isSingleLine('\n'), true, '只有一个换行');
+});
+
+test('不变量：单行判定与生成结果里的 br 严格对应', () => {
+	// 判定与生成共用 bodyLines()，这条把两者焊死：任何一侧漂移都会在这里变红（K1）。
+	const inputs = [
+		'a',
+		'a\n',
+		'a\n\n',
+		'a\r\n',
+		'a\r',
+		'a\nb',
+		'a\nb\n',
+		'a\n\nb',
+		'a  \nb',
+		'',
+		'   ',
+		'\n',
+		'a\n\n\n',
+		'a\r\nb',
+	];
+	for (const input of inputs) {
+		const hasBr = markdownToHtml(input, 'div').includes('<br>');
+		assert.equal(isSingleLine(input), !hasBr, `判定与生成不一致，输入: ${JSON.stringify(input)}`);
 	}
 });
 

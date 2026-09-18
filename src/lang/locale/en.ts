@@ -33,9 +33,12 @@ export default {
 	'Supported tags': 'Supported tags',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
 		'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
-	'Wrapper tag': 'Wrapper tag',
-	'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.':
-		'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.',
+	'Single-line wrapper tag': 'Single-line wrapper tag',
+	'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.':
+		'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.',
+	'Multi-line wrapper tag': 'Multi-line wrapper tag',
+	'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.':
+		'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.',
 	'Follow theme': 'Follow theme',
 
 	// —— 命令名 · 右键菜单项 ——
@@ -44,8 +47,8 @@ export default {
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': 'Please use a single cursor.',
-	'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.':
-		'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.',
+	'Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".':
+		'Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".',
 	'The selection is empty; nothing to convert.': 'The selection is empty; nothing to convert.',
 	'The selection is indented too deeply and would be treated as a code block.':
 		'The selection is indented too deeply and would be treated as a code block.',

@@ -1,1 +1,2 @@
 - Add multi languages support
+- separate wrapper tag settings for single-line (p) and multi-line (div) selections

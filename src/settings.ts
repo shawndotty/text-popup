@@ -24,8 +24,15 @@ export interface TextPopupSettings {
 	supportedTags: string[];
 	/** 代码块 / Callout / 数学块是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
-	/** `Popup Selected Text` 用来包裹文本的标签；必须是 supportedTags 里的块级标签。 */
-	popupTag: string;
+	/** `Popup Selected Text` 包裹单行选区用的标签；必须是 supportedTags 里的块级标签。 */
+	singleLineTag: string;
+	/** `Popup Selected Text` 包裹多行选区（含换行）用的标签；必须是 supportedTags 里的块级标签。 */
+	multiLineTag: string;
+}
+
+/** 老 `data.json` 只有 `popupTag`（1.1.0 之前唯一的包裹标签），升级后它代表多行标签。 */
+interface LegacySettings extends Partial<TextPopupSettings> {
+	popupTag?: unknown;
 }
 
 export const DEFAULT_SETTINGS: TextPopupSettings = {
@@ -36,7 +43,8 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
 	blockKinds: { code: true, callout: true, math: true },
-	popupTag: 'div',
+	singleLineTag: 'p',
+	multiLineTag: 'div',
 };
 
 export const FONT_SIZE_MIN = 12;
@@ -72,20 +80,41 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 }
 
 /**
- * 包裹标签的约束式回落：必须同时「在支持列表里」与「是块级标签」才采纳，
+ * 多行包裹标签的约束式回落：必须同时「在支持列表里」与「是块级标签」才采纳，
  * 否则取支持列表里第一个块级标签（列表里没有块级标签时回落到默认的 `div`）。
  * 老 `data.json` 没有这个字段 → 自动补齐，不需要迁移脚本。
  */
-export function resolvePopupTag(tag: unknown, supportedTags: readonly string[]): string {
+export function resolveMultiLineTag(tag: unknown, supportedTags: readonly string[]): string {
 	const blockTags = supportedTags.filter(isBlockLevelTag);
 	if (typeof tag === 'string' && blockTags.includes(tag)) return tag;
-	return blockTags[0] ?? DEFAULT_SETTINGS.popupTag;
+	return blockTags[0] ?? DEFAULT_SETTINGS.multiLineTag;
+}
+
+/**
+ * 单行包裹标签的约束式回落，判据与 `resolveMultiLineTag` 完全相同（非空字符串 + 块级 + 在支持列表里）。
+ * 依次尝试「存值 → 默认 `p` → 多行标签 → 支持列表里第一个块级标签」，全不合法时回落到默认 `div`。
+ * 多行标签排在里面，是为了让「把 `p` 从支持列表删掉」时单行自动退回旧行为（等价于 1.1.0 之前）。
+ * **调用方必须先落定多行标签**（回落链依赖它）。
+ */
+export function resolveSingleLineTag(
+	value: unknown,
+	multiLineTag: string,
+	supportedTags: readonly string[],
+): string {
+	const blockTags = supportedTags.filter(isBlockLevelTag);
+	const candidates = [value, DEFAULT_SETTINGS.singleLineTag, multiLineTag, ...blockTags];
+	for (const candidate of candidates) {
+		if (typeof candidate === 'string' && blockTags.includes(candidate)) return candidate;
+	}
+	return DEFAULT_SETTINGS.multiLineTag;
 }
 
 /** 把磁盘上可能残缺 / 过期的数据整理成一份完整设置。 */
 export function normalizeSettings(raw: unknown): TextPopupSettings {
-	const data = (raw ?? {}) as Partial<TextPopupSettings>;
+	const data = (raw ?? {}) as LegacySettings;
 	const supportedTags = normalizeTagList(data.supportedTags);
+	// 顺序不能颠倒：单行的兜底依赖多行先落定。
+	const multiLineTag = resolveMultiLineTag(data.multiLineTag ?? data.popupTag, supportedTags);
 	return {
 		enabled: typeof data.enabled === 'boolean' ? data.enabled : DEFAULT_SETTINGS.enabled,
 		renderRichText:
@@ -100,14 +129,16 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 		popupFontSize: clampFontSize(data.popupFontSize),
 		supportedTags,
 		blockKinds: readBlockKinds(data.blockKinds),
-		popupTag: resolvePopupTag(data.popupTag, supportedTags),
+		singleLineTag: resolveSingleLineTag(data.singleLineTag, multiLineTag, supportedTags),
+		multiLineTag,
 	};
 }
 
 export class TextPopupSettingTab extends PluginSettingTab {
 	private plugin: TextPopupPlugin;
-	/** 「包裹标签」下拉框；「支持的标签」改动把它挤掉时用它同步显示，不整页重绘。 */
-	private popupTagDropdown: DropdownComponent | null = null;
+	/** 两个包裹标签下拉框；「支持的标签」改动把它们挤掉时用它同步显示，不整页重绘。 */
+	private tagDropdowns: Array<{ dropdown: DropdownComponent; key: 'singleLineTag' | 'multiLineTag' }> =
+		[];
 
 	constructor(app: App, plugin: TextPopupPlugin) {
 		super(app, plugin);
@@ -117,6 +148,8 @@ export class TextPopupSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		// 整页重绘会丢弃旧的下拉框节点，引用一并清空
+		this.tagDropdowns = [];
 
 		new Setting(containerEl)
 			.setName(t('Enable magnifier icon'))
@@ -212,43 +245,82 @@ export class TextPopupSettingTab extends PluginSettingTab {
 						if (tags.join(',') === this.plugin.settings.supportedTags.join(',')) return;
 						this.plugin.settings.supportedTags = tags;
 						// 列表改小可能把当前包裹标签挤掉，顺手回落到下一个合法标签。
+						// 顺序不能颠倒：单行的兜底链依赖多行先落定。
 						// 不整页重绘：那会让正在输入的这个文本框失焦。
-						const popupTag = resolvePopupTag(this.plugin.settings.popupTag, tags);
-						this.plugin.settings.popupTag = popupTag;
-						this.popupTagDropdown?.setValue(popupTag);
+						const multiLineTag = resolveMultiLineTag(this.plugin.settings.multiLineTag, tags);
+						const singleLineTag = resolveSingleLineTag(
+							this.plugin.settings.singleLineTag,
+							multiLineTag,
+							tags,
+						);
+						this.plugin.settings.multiLineTag = multiLineTag;
+						this.plugin.settings.singleLineTag = singleLineTag;
+						this.syncTagDropdowns();
 						await this.plugin.saveSettings();
 						refreshTextPopupActions(this.plugin);
 					}),
 			);
 
-		this.addPopupTagSetting(containerEl);
+		this.addTagSetting(
+			containerEl,
+			'singleLineTag',
+			t('Single-line wrapper tag'),
+			t(
+				'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.',
+			),
+		);
+		this.addTagSetting(
+			containerEl,
+			'multiLineTag',
+			t('Multi-line wrapper tag'),
+			t(
+				'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.',
+			),
+		);
+	}
+
+	/** 把设置里的两个包裹标签推回下拉框（「支持的标签」改动后调用）。 */
+	private syncTagDropdowns(): void {
+		for (const { dropdown, key } of this.tagDropdowns) {
+			dropdown.setValue(this.plugin.settings[key]);
+		}
 	}
 
 	/**
-	 * 包裹标签：`Popup Selected Text` 生成块时用的外层标签。
+	 * 包裹标签：`Popup Selected Text` 生成块时用的外层标签（单行 / 多行各一个）。
 	 * 选项只取「支持的标签」里的块级标签 —— 行内标签（`span` 等）生成的块不会有放大图标。
 	 */
-	private addPopupTagSetting(containerEl: HTMLElement): void {
-		const setting = new Setting(containerEl)
-			.setName(t('Wrapper tag'))
-			.setDesc(
-				t(
-					'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.',
-				),
-			);
+	private addTagSetting(
+		containerEl: HTMLElement,
+		key: 'singleLineTag' | 'multiLineTag',
+		name: string,
+		desc: string,
+	): void {
+		const setting = new Setting(containerEl).setName(name).setDesc(desc);
 
 		setting.addDropdown((dropdown) => {
 			// 当前值一定留在选项里：否则 supportedTags 被改空后下拉框会显示成空白
 			const tags = new Set([
 				...this.plugin.settings.supportedTags.filter(isBlockLevelTag),
-				this.plugin.settings.popupTag,
+				this.plugin.settings[key],
 			]);
 			for (const tag of tags) dropdown.addOption(tag, tag);
-			dropdown.setValue(this.plugin.settings.popupTag).onChange(async (value) => {
-				this.plugin.settings.popupTag = resolvePopupTag(value, this.plugin.settings.supportedTags);
+			dropdown.setValue(this.plugin.settings[key]).onChange(async (value) => {
+				if (key === 'multiLineTag') {
+					this.plugin.settings.multiLineTag = resolveMultiLineTag(
+						value,
+						this.plugin.settings.supportedTags,
+					);
+				} else {
+					this.plugin.settings.singleLineTag = resolveSingleLineTag(
+						value,
+						this.plugin.settings.multiLineTag,
+						this.plugin.settings.supportedTags,
+					);
+				}
 				await this.plugin.saveSettings();
 			});
-			this.popupTagDropdown = dropdown;
+			this.tagDropdowns.push({ dropdown, key });
 		});
 	}
 

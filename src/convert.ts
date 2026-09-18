@@ -12,9 +12,12 @@
  * 两条来自既有实现的硬约束：
  * - **块里不能有空行**：块级原始 HTML 到第一个空行就结束（`blocks.ts` 的 `matchHtmlBlock`），
  *   一旦生成空行，块会被截断、后半段掉出弹窗。正文写成**独占一行的单行**，结构上不可能有空行。
- * - **行结构不能用 `<p>`**：`<p><p>a</p><p>b</p></p>` 会被 HTML 解析器拆开，
+ * - **正文里的行结构不能用 `<p>`**：`<p><p>a</p><p>b</p></p>` 会被 HTML 解析器拆开，
  *   `findSupportedElement`（`tags.ts`）命中的是第一个空 `<p>`，`hasContent` 为假 → 块直接不算候选。
  *   用 `<br>` 表达换行，则 `div` / `p` / `section` 等任意块级标签都是合法嵌套。
+ *
+ * 注意区分上面第二条与**外层标签**：外层标签用 `p`（单行选区的默认值）是合法的 ——
+ * 它的正文要么是单行纯文本（不含任何 `<br>`），要么用 `<br>` 表达换行，都不涉及「正文里拿 `<p>` 当行结构」。
  *
  * 为什么 `<br>` 后面**不**跟源码换行：弹窗的富文本渲染走 `MarkdownRenderer`，而本库的
  * 「严格换行」是关的 —— 一个软换行也会渲染成 `<br>`。于是 `A<br>\nB` 在弹窗里会变成
@@ -207,17 +210,38 @@ export function hasTooDeepIndent(text: string): boolean {
 }
 
 /**
+ * Popup 的正文行：归一化换行、丢掉选区末尾的空行。
+ * `markdownToHtml` 与 `isSingleLine` 共用它，判定与生成不会漂移。
+ * 返回的是新数组，调用方不要再改写它。
+ */
+function bodyLines(text: string): string[] {
+	const lines = normalizeNewlines(text).split('\n');
+	while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+	return lines;
+}
+
+/**
+ * 选区是否为「单行」——也就是生成的正文里不会出现 `<br>`。
+ *
+ * 定义落在生成结果上而不是「字符串里含不含 `\n`」：编辑器选到行尾时常常多带一个换行，
+ * 而那个换行本来就会被丢掉，按字面判定会让这些输入拿到多行标签、与生成结果自相矛盾。
+ * 不变量：`isSingleLine(x)` ⇔ `markdownToHtml(x, …)` 的正文里不含 `<br>`。
+ */
+export function isSingleLine(text: string): boolean {
+	return bodyLines(text).length === 1;
+}
+
+/**
  * Popup：把选中的 Markdown 文本转成可放大的 HTML 块。
  *
  * 每个换行 = 一个 `<br>`（原文的空行 = 相邻两个 `<br>`），整段正文压在**一行**里：
  * 既保证块里没有空行，也让弹窗的富文本渲染不多出换行（见文件头的格式说明）。
  * 选区末尾的空行会被丢掉：编辑器选到行尾时常常多带一个换行，留着只会让 `</T>` 前多出一行。
+ *
+ * `tag` 由命令层决定（按 `isSingleLine` 取单行 / 多行标签）；本函数的签名与行为不随设置变化。
  */
 export function markdownToHtml(text: string, tag: string): string {
-	const lines = normalizeNewlines(text).split('\n');
-	while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-
-	const body = lines.map((line) => convertInline(line)).join('<br>');
+	const body = bodyLines(text).map((line) => convertInline(line)).join('<br>');
 	return `<${tag}>\n${body}\n</${tag}>`;
 }
 

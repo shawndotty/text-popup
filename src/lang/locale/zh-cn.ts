@@ -31,9 +31,12 @@ const zhCN: Partial<typeof en> = {
 	'Supported tags': '支持的标签',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
 		'只对手写的块级 HTML 生效，用逗号分隔，例如 div, p。修改后立即生效，不需要改代码。',
-	'Wrapper tag': '包裹标签',
-	'Which block-level tag the conversion commands use to wrap the selected text. Only block-level tags can produce a magnifiable block.':
-		'转换命令用哪个块级标签包裹选中的文本；只有块级标签能生成可放大的块。',
+	'Single-line wrapper tag': '单行文本包裹标签',
+	'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.':
+		'选区只有一行时，转换命令用哪个块级标签包裹文本；只有块级标签能生成可放大的块。',
+	'Multi-line wrapper tag': '多行文本包裹标签',
+	'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.':
+		'选区含换行（多行）时，转换命令用哪个块级标签包裹文本；只有块级标签能生成可放大的块。',
 	'Follow theme': '跟随主题',
 
 	// —— 命令名 · 右键菜单项 ——
@@ -42,8 +45,8 @@ const zhCN: Partial<typeof en> = {
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '请在单光标下使用',
-	'Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.':
-		'包裹标签不可用，请在设置里检查「包裹标签」与「支持的标签」',
+	'Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".':
+		'包裹标签不可用，请在设置里检查「单行文本包裹标签」「多行文本包裹标签」与「支持的标签」',
 	'The selection is empty; nothing to convert.': '选中的是空行，没有可转换的内容',
 	'The selection is indented too deeply and would be treated as a code block.':
 		'选区缩进太深，会被当成代码块，无法生成可放大的块',

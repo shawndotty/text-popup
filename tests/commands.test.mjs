@@ -149,12 +149,12 @@ test('没有选区时命令在面板里灰掉（editorCheckCallback 返回 false
 
 // —— Popup 正常路径 ——
 
-test('Popup 把选中文本写成包裹标签块', () => {
+test('Popup 单行选区默认用 p 标签', () => {
 	const host = createHost();
 	registerCommands(host);
 	const editor = createEditor('hello **world**');
 	runCommand(host, POPUP, editor);
-	assert.equal(editor.getValue(), '<div>\nhello <strong>world</strong>\n</div>');
+	assert.equal(editor.getValue(), '<p>\nhello <strong>world</strong>\n</p>');
 	assert.deepEqual([...notices], [], '成功路径不该有提示');
 });
 
@@ -164,7 +164,7 @@ test('Popup 在闭标签后紧邻非空行时补一个空行', () => {
 	const text = 'hello **world**\nafter';
 	const editor = createEditor(text, selectLines(text, 0, 0));
 	runCommand(host, POPUP, editor);
-	assert.equal(editor.getValue(), '<div>\nhello <strong>world</strong>\n</div>\n\nafter');
+	assert.equal(editor.getValue(), '<p>\nhello <strong>world</strong>\n</p>\n\nafter');
 });
 
 test('Popup 在文末插入时不补多余的换行', () => {
@@ -172,15 +172,55 @@ test('Popup 在文末插入时不补多余的换行', () => {
 	registerCommands(host);
 	const editor = createEditor('hello');
 	runCommand(host, POPUP, editor);
-	assert.equal(editor.getValue(), '<div>\nhello\n</div>');
+	assert.equal(editor.getValue(), '<p>\nhello\n</p>');
 });
 
-test('Popup 用设置里的包裹标签', () => {
-	const host = createHost({ supportedTags: 'div, p', popupTag: 'p' });
+test('Popup 多行选区默认用 div，正文用 br 表达换行', () => {
+	const host = createHost();
+	registerCommands(host);
+	for (const [input, expected] of [
+		['a\nb', '<div>\na<br>b\n</div>'],
+		['a\n\nb', '<div>\na<br><br>b\n</div>'],
+	]) {
+		const editor = createEditor(input);
+		runCommand(host, POPUP, editor);
+		assert.equal(editor.getValue(), expected, `输入: ${JSON.stringify(input)}`);
+	}
+});
+
+test('Popup 单行选区的标签由 singleLineTag 决定', () => {
+	const host = createHost({ singleLineTag: 'div' });
 	registerCommands(host);
 	const editor = createEditor('hello');
 	runCommand(host, POPUP, editor);
-	assert.equal(editor.getValue(), '<p>\nhello\n</p>');
+	assert.equal(editor.getValue(), '<div>\nhello\n</div>');
+});
+
+test('p 不在支持列表里时，单行回落到多行标签（回落可见）', () => {
+	const host = createHost({ supportedTags: 'div' });
+	registerCommands(host);
+	const editor = createEditor('hello');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<div>\nhello\n</div>');
+});
+
+test('Popup 多行选区的标签由 multiLineTag 决定', () => {
+	const host = createHost({ supportedTags: 'div, p', multiLineTag: 'p' });
+	registerCommands(host);
+	const editor = createEditor('a\nb');
+	runCommand(host, POPUP, editor);
+	assert.equal(editor.getValue(), '<p>\na<br>b\n</p>');
+});
+
+test('老数据（只有 popupTag）下单行与多行都用旧标签', () => {
+	const host = createHost({ popupTag: 'p' });
+	registerCommands(host);
+	const single = createEditor('hello');
+	runCommand(host, POPUP, single);
+	assert.equal(single.getValue(), '<p>\nhello\n</p>', '单行');
+	const multi = createEditor('a\nb');
+	runCommand(host, POPUP, multi);
+	assert.equal(multi.getValue(), '<p>\na<br>b\n</p>', '多行');
 });
 
 // —— Popup 守卫 ——
@@ -286,6 +326,14 @@ test('Unpopup 还原行内标记', () => {
 	assert.equal(editor.getValue(), '**粗** 与 `x`');
 });
 
+test('Unpopup 能还原单行 p 块（p 在外层合法）', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('<p>\nhello **world**\n</p>');
+	runCommand(host, UNPOPUP, editor);
+	assert.equal(editor.getValue(), 'hello **world**');
+});
+
 test('多光标时 Unpopup 同样拒绝', () => {
 	const host = createHost();
 	registerCommands(host);
@@ -323,7 +371,7 @@ test('选区跨多个弹窗块时拒绝', () => {
 });
 
 test('外层标签不在支持列表里时拒绝', () => {
-	const host = createHost({ supportedTags: 'p', popupTag: 'p' });
+	const host = createHost({ supportedTags: 'p', multiLineTag: 'p' });
 	registerCommands(host);
 	const text = '<div>\na\n</div>';
 	const editor = createEditor(text, selectLines(text, 0, 2));
@@ -347,5 +395,18 @@ test('Popup 之后紧接着 Unpopup 回到原文', () => {
 	const restored = createEditor(wrapped);
 	runCommand(host, UNPOPUP, restored);
 	assert.notEqual(wrapped, original, 'Popup 应该改写了原文');
+	assert.equal(restored.getValue(), original, '往返应回到原文');
+});
+
+test('单行选区的 Popup → Unpopup 往返回到原文', () => {
+	const host = createHost();
+	registerCommands(host);
+	const original = 'hello **world**';
+	const editor = createEditor(original);
+	runCommand(host, POPUP, editor);
+	const wrapped = editor.getValue();
+	assert.equal(wrapped, '<p>\nhello <strong>world</strong>\n</p>', '单行默认用 p');
+	const restored = createEditor(wrapped);
+	runCommand(host, UNPOPUP, restored);
 	assert.equal(restored.getValue(), original, '往返应回到原文');
 });

@@ -12,7 +12,7 @@ import { Notice } from 'obsidian';
 import type { App, Command, Editor, EventRef } from 'obsidian';
 import { isBlockLevelTag, scanTextBlocks } from './blocks';
 import type { TextBlockRegion } from './blocks';
-import { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, markdownToHtml } from './convert';
+import { findOuterPopupElement, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } from './convert';
 import { t } from './lang/helpers';
 import type { TextPopupSettings } from './settings';
 
@@ -77,12 +77,6 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 		return;
 	}
 
-	const tag = resolvePopupTag(host.settings);
-	if (!tag) {
-		new Notice(t('Wrapper tag unavailable. Check "Wrapper tag" and "Supported tags" in settings.'));
-		return;
-	}
-
 	const range = readSelectedLines(editor);
 	const text = editor.getRange(range.from, range.to);
 	if (!text.trim()) {
@@ -104,6 +98,13 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 	}
 	if (clash) {
 		new Notice(t('The selection already contains a popup block; use the unpopup command first.'));
+		return;
+	}
+
+	// 标签依赖已取到的选区文本：单行 / 多行各取一个设置项，不合法时按同一套判据拒绝
+	const tag = resolvePopupTag(host.settings, isSingleLine(text));
+	if (!tag) {
+		new Notice(t('Wrapper tag unavailable. Check the wrapper tag settings and "Supported tags".'));
 		return;
 	}
 
@@ -196,8 +197,11 @@ function lineStartOffset(text: string, line: number): number {
 	return offset;
 }
 
-/** 包裹标签必须同时是块级标签、且在「支持的标签」里，否则块不会生成、或生成了也没有放大图标。 */
-function resolvePopupTag(settings: TextPopupSettings): string | null {
-	const tag = settings.popupTag;
+/**
+ * 包裹标签必须同时是块级标签、且在「支持的标签」里，否则块不会生成、或生成了也没有放大图标。
+ * 按选区是否为单行取对应的设置项（单行选中 `singleLineTag`，含换行选中 `multiLineTag`）。
+ */
+function resolvePopupTag(settings: TextPopupSettings, singleLine: boolean): string | null {
+	const tag = singleLine ? settings.singleLineTag : settings.multiLineTag;
 	return tag && isBlockLevelTag(tag) && settings.supportedTags.includes(tag) ? tag : null;
 }
