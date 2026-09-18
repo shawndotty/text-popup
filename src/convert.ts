@@ -9,11 +9,15 @@
  *   第一段第一行<br>第一段第二行<br><br>第二段
  *   </div>
  *
- * 列表是唯一一个「留原文就彻底失效」的块级语法（`- a<br>- b` 在编辑器与弹窗里都不会成列表），
- * 所以它被特判成真正的 HTML 列表，压在正文那一行里：
+ * 列表与**表格**是两个「留原文就彻底失效」的块级语法（`- a<br>- b` 在编辑器与弹窗里都不会成列表；
+ * `| a |<br>| - |` 同理），所以它们被特判成真正的 HTML 元素，压在正文那一行里：
  *
  *   <div>
  *   文字<br><ul><li>一项</li><li>二项</li></ul><br>文字
+ *   </div>
+ *
+ *   <div>
+ *   文字<br><table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>
  *   </div>
  *
  * **三条**来自既有实现的硬约束：
@@ -22,12 +26,24 @@
  * - **正文里的行结构不能用 `<p>`**：`<p><p>a</p><p>b</p></p>` 会被 HTML 解析器拆开，
  *   `findSupportedElement`（`tags.ts`）命中的是第一个空 `<p>`，`hasContent` 为假 → 块直接不算候选。
  *   用 `<br>` 表达换行，则 `div` / `p` / `section` 等任意块级标签都是合法嵌套。
- * - **正文里的块级元素只能是 `ul` / `ol`**（以及它们的 `li`），且只画在正文那一行里，不引入换行。
+ * - **正文里的块级元素只能是 `ul` / `ol` / `table`**（以及它们的 `li` / `tr` / `th` / `td`），且只画在
+ *   正文那一行里，不引入换行。
  *   推论：**含列表的正文不能拿 `p` 当外壳** —— 解析器在「in body」插入模式下遇到 `<ul>` 会自动闭合
  *   未闭合的 `<p>`，末尾那个孤立 `</p>` 还会再补出一个**空 `<p>`**，`findSupportedElement` 命中的
  *   就是这个空元素 → `hasContent` 为假 → 块没有放大图标。命令层因此把「选区正文含列表」判成多行形态
  *   （`hasBlockBody`），并给 `resolvePopupTag` 加了一条 `p` 守卫兜底。
+ *   （`<table>` 不受这条约束：解析器不拿它闭合 `<p>`，实测 `<p><table>` 在弹窗里照常出表格。
+ *   表格天然 ≥2 行（表头 + 分隔行）→ 永远走多行标签，`hasBlockBody` 对它没有意义。）
  *
+ * 表格的判据逐条对齐核心（markdown-it 的 `table` 规则），**宁可漏判也不误判**：
+ * - **必须起一个块**：表头行前面得是空行或选区开头（`text` 紧邻表头只是一段带竖线的普通文字）；
+ * - 表头行与**分隔行**都必须含**未转义的** `|`（否则 `a` + `---` 是 Setext 标题；`| a |` + `---`
+ *   同样是 Setext 标题，实测核心在阅读视图里给出 `h2` 而不是表格 —— 只有 `| a |` + `| - |` 才是单列表格）；
+ * - 列数取**分隔行**的格数，表头行与数据行一律按它截断 / 补空；
+ * - 数据行遇到空行、缩进 ≥4、不含未转义 `|`、列表行、引用行、ATX 标题即终止（表格后面不需要空行）；
+ * - 分流顺序 `table` → `list` → 普通行，与核心的 block 规则顺序一致（`- a | b` + `--- | ---` 是表格）。
+ *
+
  * 注意区分上面第二条与**外层标签**：外层标签用 `p`（单行选区的默认值）是合法的 ——
  * 它的正文要么是单行纯文本（不含任何 `<br>` 与块级元素），要么用 `<br>` 表达换行，
  * 都不涉及「正文里拿 `<p>` 当行结构」。
@@ -397,15 +413,224 @@ function renderListBlocks(blocks: readonly ListBlock[]): string {
 	return out;
 }
 
+// —— 块级转换：Markdown 表格 → HTML 表格 ——
+//
+// 表格与列表同属「留原文就彻底失效」的块级语法（`| a |` 与 `| - |` 被 `<br>` 压成一行后，
+// 编辑器不解析块内 Markdown、弹窗也认不出分隔行 → 两边都不成表格），因此同样转成真正的 HTML。
+// 判据逐条对齐核心的 `table` 规则（见文件头），刻意不做更强的猜测。
+
+/** 表格对齐；`null` = 没指定（Markdown 的分隔行不写冒号）。 */
+type TableAlign = 'left' | 'center' | 'right';
+
+/** 从原文里认出的一张表。 */
+interface TableBlock {
+	/** 每列的对齐，长度 = 列数（= 分隔行的格数）。 */
+	aligns: ReadonlyArray<TableAlign | null>;
+	/** 表头行的单元格（已按列数截断 / 补空）。 */
+	header: readonly string[];
+	/** 数据行（每行都已按列数截断 / 补空）。 */
+	rows: ReadonlyArray<readonly string[]>;
+	/** 表格结束后的下一行下标。 */
+	end: number;
+}
+
+/** 缩进 ≥4 个空格（或含制表符）就是代码块，表格 / 分隔行在那里都不成立。 */
+function hasCodeIndent(line: string): boolean {
+	const leading = /^[ \t]*/.exec(line)?.[0] ?? '';
+	return leading.includes('\t') || leading.length >= 4;
+}
+
 /**
- * 正文行 → HTML：连续的列表行归成一段渲染成列表元素，其余行照旧逐行走行内转换。
- * 行与行、段与段之间一律用 `<br>` 连接 —— 列表元素因此压在正文那一行里，块里不会出现空行。
+ * 把内容里**未被转义**的 `|` 补上反斜杠。
+ *
+ * 还原出的表格会被自己的竖线切断，所以单元格里的字面竖线必须重新转义；
+ * 只看紧邻的那串反斜杠的奇偶，已经是 `\|` 的不会再补一层。
+ */
+function escapePipes(text: string): string {
+	let out = '';
+	let backslashes = 0;
+
+	for (const char of text) {
+		if (char === '|' && backslashes % 2 === 0) out += '\\';
+		out += char;
+		backslashes = char === '\\' ? backslashes + 1 : 0;
+	}
+
+	return out;
+}
+
+/** `escapePipes` 的反向：`\|` → 字面 `|`（核心渲染表格时 `\|` 就是一个竖线字符）。 */
+function unescapePipes(text: string): string {
+	let out = '';
+	let backslashes = 0;
+
+	for (const char of text) {
+		if (char === '|' && backslashes % 2 === 1) {
+			// 丢掉转义用的那一个反斜杠；`out` 此时必定以它结尾
+			out = `${out.slice(0, -1)}|`;
+			backslashes = 0;
+			continue;
+		}
+		out += char;
+		backslashes = char === '\\' ? backslashes + 1 : 0;
+	}
+
+	return out;
+}
+
+/**
+ * 表行 → 单元格数组；整行不含未转义的 `|` 时返回 null（那不是表行）。
+ *
+ * 与核心同一条规则：按**未转义的** `|` 切开，丢掉首尾由边界竖线造成的空段（`| a |` 与 `a`
+ * 都是「一格」），再逐格 trim。转义过的 `\|` 不分格，且在这里就还原成字面竖线 —— 与核心的
+ * 单元格内容一致（核心渲染 `\|` 时留下的是一个竖线字符，不是反斜杠加竖线）。
+ *
+ * 表头行与**分隔行**共用这条判据。分隔行也必须含竖线：实测核心把 `| a |` + `---` 渲染成
+ * **Setext 标题**（阅读视图里是 `h2`）而不是表格，只有 `| a |` + `| - |` 才是单列表格。
+ */
+function splitTableRow(line: string): string[] | null {
+	const cells: string[] = [];
+	let current = '';
+	let backslashes = 0;
+	let hasPipe = false;
+
+	for (const char of line) {
+		if (char === '|' && backslashes % 2 === 0) {
+			cells.push(current);
+			current = '';
+			hasPipe = true;
+			backslashes = 0;
+			continue;
+		}
+		current += char;
+		backslashes = char === '\\' ? backslashes + 1 : 0;
+	}
+	cells.push(current);
+
+	if (!hasPipe) return null;
+
+	// 首尾两段只可能来自边界竖线，空则丢掉（中间的空格是真实的一格，不能丢）
+	if (cells.length > 1 && (cells[0] ?? '').trim() === '') cells.shift();
+	if (cells.length > 1 && (cells[cells.length - 1] ?? '').trim() === '') cells.pop();
+
+	return cells.map((cell) => unescapePipes(cell.trim()));
+}
+
+/**
+ * 分隔行 → 每列的对齐；不是分隔行则返回 null（这一行不成立就整张表不成立）。
+ * 认 `:---`（左）/ `:---:`（中）/ `---:`（右）/ `---`（不指定），横线数量不限。
+ */
+function parseDelimiterRow(line: string): Array<TableAlign | null> | null {
+	if (hasCodeIndent(line)) return null;
+	// 核心只允许 `| - :` 与空白出现在分隔行里
+	if (!/^[\s|:-]+$/.test(line)) return null;
+
+	const cells = splitTableRow(line);
+	if (!cells || cells.length === 0) return null;
+
+	const aligns: Array<TableAlign | null> = [];
+	for (const cell of cells) {
+		const match = /^(:?)-+(:?)$/.exec(cell);
+		if (!match) return null;
+		const left = match[1] === ':';
+		const right = match[2] === ':';
+		aligns.push(left && right ? 'center' : left ? 'left' : right ? 'right' : null);
+	}
+
+	return aligns;
+}
+
+/** 按列数截断 / 补空 —— 列数取自分隔行，多出来的格丢掉、少掉的补空格。 */
+function fitRow(cells: readonly string[], columns: number): string[] {
+	const row = cells.slice(0, columns);
+	while (row.length < columns) row.push('');
+	return row;
+}
+
+/**
+ * 从 `lines[start]` 起认一张表；不成表返回 null。
+ *
+ * 判据（对应文件头那几条与核心的实测）：表头行必须起一个块且含未转义的 `|`，
+ * 下一行必须是合法分隔行；数据行往下吃到第一个终止行为止。
+ */
+function matchTable(lines: readonly string[], start: number): TableBlock | null {
+	// 必须起一个块：紧跟在正文后面的表头行只是一段带竖线的普通文字
+	if (start > 0 && (lines[start - 1] ?? '').trim() !== '') return null;
+
+	const headerLine = lines[start] ?? '';
+	if (hasCodeIndent(headerLine)) return null;
+	const header = splitTableRow(headerLine);
+	if (!header) return null;
+
+	const aligns = parseDelimiterRow(lines[start + 1] ?? '');
+	if (!aligns) return null;
+
+	const columns = aligns.length;
+	const rows: string[][] = [];
+	let index = start + 2;
+
+	while (index < lines.length) {
+		const line = lines[index] ?? '';
+		if (line.trim() === '') break;
+		if (hasCodeIndent(line)) break;
+		const cells = splitTableRow(line);
+		if (!cells) break;
+		if (splitListLine(line) || /^ {0,3}>/.test(line) || /^ {0,3}#/.test(line)) break;
+		rows.push(fitRow(cells, columns));
+		index += 1;
+	}
+
+	return { aligns, header: fitRow(header, columns), rows, end: index };
+}
+
+/**
+ * 表格 → HTML。markup 与核心同形：表头进 `<thead>`、数据行进 `<tbody>`，对齐用 `align` 属性
+ * （核心自己用的就是它，实测生效；换 `style` 反而多一层被主题 / 净化覆盖的风险）。
+ * 单元格内容走 `convertInline`，与列表项同一条路：`**粗体**` / `==高亮==` / `` `代码` `` 照旧生效。
+ */
+function renderTableHtml(table: TableBlock): string {
+	const cell = (tag: 'th' | 'td', content: string, align: TableAlign | null): string =>
+		`<${tag}${align ? ` align="${align}"` : ''}>${convertInline(content)}</${tag}>`;
+
+	let out = '<table><thead><tr>';
+	for (let column = 0; column < table.header.length; column++) {
+		out += cell('th', table.header[column] ?? '', table.aligns[column] ?? null);
+	}
+	out += '</tr></thead>';
+
+	if (table.rows.length > 0) {
+		out += '<tbody>';
+		for (const row of table.rows) {
+			out += '<tr>';
+			for (let column = 0; column < row.length; column++) {
+				out += cell('td', row[column] ?? '', table.aligns[column] ?? null);
+			}
+			out += '</tr>';
+		}
+		out += '</tbody>';
+	}
+
+	return `${out}</table>`;
+}
+
+/**
+ * 正文行 → HTML：连续的列表行归成一段渲染成列表元素，连续的表格行渲染成 `<table>`，
+ * 其余行照旧逐行走行内转换。行与行、段与段之间一律用 `<br>` 连接 ——
+ * 列表与表格元素因此压在正文那一行里，块里不会出现空行。
  */
 function renderBody(lines: readonly string[]): string {
 	const parts: string[] = [];
 	let index = 0;
 
 	while (index < lines.length) {
+		// 表格先于列表：核心的 block 规则里 table 也排在 list 之前（`- a | b` + `--- | ---` 是表格）
+		const table = matchTable(lines, index);
+		if (table) {
+			parts.push(renderTableHtml(table));
+			index = table.end;
+			continue;
+		}
+
 		const line = lines[index] ?? '';
 		if (!splitListLine(line)) {
 			parts.push(convertInline(line));
@@ -631,6 +856,169 @@ function readListElement(text: string, at: number): { markdown: string; end: num
 	return { markdown: lines.join('\n'), end: pos };
 }
 
+/** HTML 表格里的一个单元格；对齐只从表头行读。 */
+interface CellSpec {
+	tag: 'th' | 'td';
+	align: TableAlign | null;
+	content: string;
+}
+
+/** 标签原文里的属性部分（去掉 `<name` 与结尾的 `>`），用于按属性名判断。 */
+function tagAttributes(raw: string): string {
+	return raw
+		.replace(/^<\s*\/?\s*[a-zA-Z][a-zA-Z0-9-]*/, '')
+		.replace(/\/?>$/, '');
+}
+
+/** 从属性串里读 `align`；没写、或 `justify` 这类 Markdown 表达不了的一律返回 null。 */
+function readAlign(attributes: string): TableAlign | null {
+	const value = /\balign\s*=\s*["']?(left|center|right)["']?/i.exec(attributes)?.[1]?.toLowerCase();
+	return value === 'left' || value === 'center' || value === 'right' ? value : null;
+}
+
+/**
+ * 单元格上有没有 Markdown 表格表达不了的东西 —— 有就整段原样保留（不猜、不降级）。
+ * `colspan` / `rowspan` 只认值 ≠1 的（`colspan="1"` 与不写等价）。
+ */
+function hasUnsupportedCell(attributes: string, content: string): boolean {
+	if (/\bstyle\s*=/i.test(attributes)) return true;
+	const span = /\b(?:col|row)span\s*=\s*["']?(\d+)/i.exec(attributes);
+	if (span && span[1] !== '1') return true;
+	return isUnsupportedCellContent(content);
+}
+
+/** 单元格内容里的 `<br>` 与嵌套表格都会在还原时引入换行，Markdown 表格表达不了。 */
+function isUnsupportedCellContent(content: string): boolean {
+	return /<br\s*\/?>/i.test(content) || /<table\b/i.test(content);
+}
+
+/** 一格内容 → Markdown 格；含换行（表达不了）时返回 null。 */
+function cellToMarkdown(content: string): string | null {
+	const markdown = convertInlineBack(content).trim();
+	return markdown.includes('\n') ? null : escapePipes(markdown);
+}
+
+/** `| a | b |` 形态的一行。 */
+function renderTableLine(cells: readonly string[]): string {
+	return `| ${cells.join(' | ')} |`;
+}
+
+/** 分隔行；对齐表达不出来时就是不带冒号的 `---`（横线数量统一成 3 个）。 */
+function renderDelimiterLine(aligns: ReadonlyArray<TableAlign | null>): string {
+	return renderTableLine(
+		aligns.map((align) => (align === 'center' ? ':---:' : align === 'left' ? ':---' : align === 'right' ? '---:' : '---')),
+	);
+}
+
+/**
+ * 读一个 `<tr>` 的单元格，读到与它配对的 `</tr>` 为止。
+ * 结构畸形（出现 `th` / `td` 之外的元素、缺闭标签、单元格表达不了）返回 null。
+ */
+function readTableRow(text: string, from: number): { cells: CellSpec[]; end: number } | null {
+	const cells: CellSpec[] = [];
+	let pos = from;
+
+	while (true) {
+		pos = skipHtmlWhitespace(text, pos);
+		const tag = readTag(text, pos);
+
+		if (tag && tag.closing) {
+			return tag.name === 'tr' && cells.length > 0 ? { cells, end: pos + tag.raw.length } : null;
+		}
+		if (!tag || (tag.name !== 'th' && tag.name !== 'td')) return null;
+
+		const close = readClosingTag(text, tag.name, pos + tag.raw.length);
+		if (!close) return null;
+
+		const attributes = tagAttributes(tag.raw);
+		const content = text.slice(pos + tag.raw.length, close.start);
+		if (hasUnsupportedCell(attributes, content)) return null;
+
+		cells.push({ tag: tag.name, align: readAlign(attributes), content });
+		pos = close.end;
+	}
+}
+
+/**
+ * 解析一个 `<table>` → Markdown 表格（`\n` 分隔的行，行与行之间不空行）。
+ *
+ * 第一行一律当表头（Markdown 表格必须有表头，HTML 没有这个概念），对齐从表头行逐列读 `align`；
+ * 每行格数必须与表头行一致（Markdown 表格必须是矩形的）。表达不了的结构一律返回 null ——
+ * 调用方会把它当「未知标签」整段原样保留，不猜、不修复（非破坏性原则）。
+ */
+function readTableElement(text: string, at: number): { markdown: string; end: number } | null {
+	const head = readTag(text, at);
+	if (!head || head.closing || head.name !== 'table') return null;
+
+	// 允许 `<thead>` / `<tbody>` / `<tfoot>` 包一层，其余元素一律算畸形
+	const stack: string[] = ['table'];
+	const rows: CellSpec[][] = [];
+	let pos = at + head.raw.length;
+	let end = -1;
+
+	while (pos < text.length) {
+		const next = text.indexOf('<', pos);
+		if (next < 0) return null;
+		if (text.slice(pos, next).trim() !== '') return null;
+
+		const tag = readTag(text, next);
+		if (!tag) return null;
+
+		if (tag.closing) {
+			if (stack.pop() !== tag.name) return null;
+			pos = next + tag.raw.length;
+			if (stack.length === 0) {
+				end = pos;
+				break;
+			}
+			continue;
+		}
+
+		if (tag.name === 'tr') {
+			const row = readTableRow(text, next + tag.raw.length);
+			if (!row) return null;
+			rows.push(row.cells);
+			pos = row.end;
+			continue;
+		}
+		if (tag.name === 'thead' || tag.name === 'tbody' || tag.name === 'tfoot') {
+			stack.push(tag.name);
+			pos = next + tag.raw.length;
+			continue;
+		}
+		return null;
+	}
+
+	const header = rows[0];
+	if (end < 0 || !header) return null;
+	if (rows.some((row) => row.length !== header.length)) return null;
+
+	const lines: string[] = [];
+	for (let index = 0; index < rows.length; index++) {
+		const row = rows[index] ?? [];
+		const cells: string[] = [];
+		for (const cell of row) {
+			const markdown = cellToMarkdown(cell.content);
+			if (markdown === null) return null;
+			cells.push(markdown);
+		}
+		lines.push(renderTableLine(cells));
+		if (index === 0) lines.push(renderDelimiterLine(header.map((cell) => cell.align)));
+	}
+
+	return { markdown: lines.join('\n'), end };
+}
+
+/**
+ * 表格前面补够空行：Markdown 里表格必须**起一个块**（表头行前面得是空行或文档开头），
+ * 否则 `text` + 换行 + 表头只会是一段带竖线的普通文字。
+ * 列表不需要这条（CommonMark 允许列表打断段落），既有行为不动。
+ */
+function ensureBlockBreak(out: string): string {
+	if (out === '' || out.endsWith('\n\n')) return out;
+	return out.endsWith('\n') ? `${out}\n` : `${out}\n\n`;
+}
+
 /**
  * 从 `<ul>` / `<ol>` 开标签起吃掉整个元素（按同名标签深度配对）。
  *
@@ -695,6 +1083,21 @@ function convertInlineBack(text: string): string {
 			}
 			// 畸形列表：整段原样保留，不猜、不修复（非破坏性原则）
 			const end = skipElement(text, at, tag.name);
+			out += text.slice(at, end);
+			index = end;
+			continue;
+		}
+
+		if (tag && !tag.closing && tag.name === 'table') {
+			const table = readTableElement(text, at);
+			if (table) {
+				// 表格必须「起一个块」，前面同一行还有内容时补空行（列表没有这条要求）
+				out = ensureBlockBreak(out) + table.markdown;
+				index = table.end;
+				continue;
+			}
+			// 畸形表格：整段原样保留，与畸形列表同待遇
+			const end = skipElement(text, at, 'table');
 			out += text.slice(at, end);
 			index = end;
 			continue;

@@ -404,6 +404,289 @@ test('列表的 markdownToHtml → htmlToMarkdown 往返回到原文', () => {
 	}
 });
 
+// —— 块级转换：Markdown 表格 → HTML 表格 ——
+//
+// 表格与列表同属「留原文就彻底失效」的块级语法：`| a |` 与 `| - |` 被 `<br>` 压成一行后，
+// 编辑器不解析块内 Markdown、弹窗也认不出分隔行 → 两边都不成表格。
+// 判据逐条对齐核心（markdown-it 的 table 规则），**宁可漏判也不误判**：
+// 必须起一个块、表头行必须含竖线、列数取分隔行、数据行遇到终止行即停。
+
+/** 表格的固定 markup，只把表头行与数据行留成参数。 */
+const table = (head, ...rows) =>
+	`<table><thead><tr>${head}</tr></thead>` +
+	(rows.length > 0 ? `<tbody>${rows.map((row) => `<tr>${row}</tr>`).join('')}</tbody>` : '') +
+	'</table>';
+
+test('基本形态：表头进 thead、数据行进 tbody', () => {
+	eq(
+		body('| a | b |\n| - | - |\n| 1 | 2 |'),
+		table('<th>a</th><th>b</th>', '<td>1</td><td>2</td>'),
+		'两列一行数据',
+	);
+	eq(
+		body('| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |'),
+		table('<th>a</th><th>b</th>', '<td>1</td><td>2</td>', '<td>3</td><td>4</td>'),
+		'两行数据',
+	);
+});
+
+test('只有表头与分隔行时不出 tbody', () => {
+	eq(body('| a | b |\n| - | - |'), table('<th>a</th><th>b</th>'), '无数据行');
+});
+
+test('首尾竖线可以省，单横线也合法', () => {
+	eq(body('a | b\n--- | ---\n1 | 2'), table('<th>a</th><th>b</th>', '<td>1</td><td>2</td>'), '首尾无竖线');
+	eq(body('| a | b |\n| - | - |'), table('<th>a</th><th>b</th>'), '单横线');
+	eq(body('x | y\n- | -'), table('<th>x</th><th>y</th>'), '- | -');
+});
+
+test('单列表格：表头与分隔行都要写竖线', () => {
+	eq(body('| a |\n| - |'), table('<th>a</th>'), '| a | + | - |');
+	eq(body('| a |\n|-|'), table('<th>a</th>'), '紧凑写法');
+});
+
+test('分隔行没有竖线时不是表格：核心把它渲染成 Setext 标题', () => {
+	// 阅读视图实测：`## CASE-A` + 空行 + `| a |` + `---` → 一个 `<h2>| a |</h2>`，没有 <table>
+	eq(body('| a |\n---'), '| a |<br>---', '| a | + ---');
+});
+
+test('对齐按分隔行的冒号落到 align 属性上（表头与数据行都带）', () => {
+	eq(
+		body('| a | b | c |\n| :--- | ---: | :---: |\n| 1 | 2 | 3 |'),
+		table(
+			'<th align="left">a</th><th align="right">b</th><th align="center">c</th>',
+			'<td align="left">1</td><td align="right">2</td><td align="center">3</td>',
+		),
+		'左 / 右 / 中',
+	);
+});
+
+test('列数取分隔行：表头与数据行按它截断 / 补空', () => {
+	eq(body('| a |\n| - |\n| 1 | 2 | 3 |'), table('<th>a</th>', '<td>1</td>'), '数据行多出的格被截断');
+	eq(body('| a | b |\n| - |\n| 1 |'), table('<th>a</th>', '<td>1</td>'), '表头多出的格被截断');
+	eq(body('| a | b |\n| - | - |\n| 1 |'), table('<th>a</th><th>b</th>', '<td>1</td><td></td>'), '少掉的格补空');
+});
+
+test('单元格内容走同一套行内转换', () => {
+	eq(
+		body('| **粗** | `x < y` |\n| - | - |\n| ==高== | ~~删~~ |'),
+		table('<th><strong>粗</strong></th><th><code>x &lt; y</code></th>', '<td><mark>高</mark></td><td><del>删</del></td>'),
+		'格内行内标记',
+	);
+});
+
+test('单元格里的转义竖线还原成字面竖线', () => {
+	eq(body('| a\\|b | c |\n| - | - |'), table('<th>a|b</th><th>c</th>'), 'a\\|b');
+});
+
+test('表格必须起一个块：紧跟在正文后面的表头行只是普通文字', () => {
+	eq(body('text\n| a | b |\n| - | - |'), 'text<br>| a | b |<br>| - | - |', 'text 紧邻表头');
+	eq(body('*em*\n| a | b |\n| - | - |'), '<em>em</em><br>| a | b |<br>| - | - |', '行内标记紧邻表头');
+	eq(
+		body('text\n\n| a | b |\n| - | - |'),
+		`text<br><br>${table('<th>a</th><th>b</th>')}`,
+		'空行后才成表格',
+	);
+});
+
+test('表头行必须含竖线，否则是 Setext 标题', () => {
+	eq(body('a\n---'), 'a<br>---', 'a + ---');
+	eq(body('a\n| --- |'), 'a<br>| --- |', 'a + | --- |');
+});
+
+test('分隔行不合法就不成表格', () => {
+	eq(body('| a | b |'), '| a | b |', '只有表头行');
+	eq(body('| a | b |\n| a | b |'), '| a | b |<br>| a | b |', '第二行不是分隔行');
+	eq(body('| a | b |\n| - | x |'), '| a | b |<br>| - | x |', '分隔行里有非横线字符');
+});
+
+test('数据行的终止条件：空行 / 无竖线 / 缩进 ≥4 / 列表行 / 引用行 / ATX 标题', () => {
+	eq(
+		body('| a | b |\n| - | - |\n\n| c | d |\n| - | - |'),
+		`${table('<th>a</th><th>b</th>')}<br><br>${table('<th>c</th><th>d</th>')}`,
+		'空行终止，两行各一张表（空行的 br 照旧保留）',
+	);
+	eq(
+		body('| a | b |\n| - | - |\n| 1 | 2 |\nafter'),
+		`${table('<th>a</th><th>b</th>', '<td>1</td><td>2</td>')}<br>after`,
+		'无竖线的行终止（表格后面不需要空行）',
+	);
+	eq(body('| a | b |\n| - | - |\n    | 1 | 2 |'), `${table('<th>a</th><th>b</th>')}<br>    | 1 | 2 |`, '缩进 4 空格');
+	eq(
+		body('| a | b |\n| - | - |\n- item | x'),
+		`${table('<th>a</th><th>b</th>')}<br><ul><li>item | x</li></ul>`,
+		'列表行终止',
+	);
+	eq(body('| a | b |\n| - | - |\n> q | q'), `${table('<th>a</th><th>b</th>')}<br>> q | q`, '引用行终止');
+	eq(body('| a | b |\n| - | - |\n# h | h'), `${table('<th>a</th><th>b</th>')}<br># h | h`, 'ATX 标题终止');
+});
+
+test('分隔行出现在数据行位置时只是普通数据行', () => {
+	eq(
+		body('| a | b |\n| - | - |\n| --- | --- |'),
+		table('<th>a</th><th>b</th>', '<td>---</td><td>---</td>'),
+		'没有「第二个分隔行终止表格」这回事',
+	);
+});
+
+test('分流顺序：表格先于列表', () => {
+	// 核心的 block 规则里 table 排在 list 之前，`- a | b` + `--- | ---` 是表格而不是列表
+	eq(body('- a | b\n--- | ---'), table('<th>- a</th><th>b</th>'), '- a | b + --- | ---');
+});
+
+test('正文压在单行里：表格不引入裸换行', () => {
+	const html = markdownToHtml('text\n| a | b |\n| - | - |\n| 1 | 2 |\nafter', 'div');
+	assert.ok(!innerOf(html).includes('\n'), '正文不应含裸换行');
+});
+
+test('表格走多行标签：isSingleLine 为假，hasBlockBody 不受影响', () => {
+	const input = '| a | b |\n| - | - |';
+	assert.equal(isSingleLine(input), false, '表格天然 ≥2 行');
+	assert.equal(hasBlockBody(input), false, '表格不需要 hasBlockBody（p 装得下 > 表格，见 H6）');
+});
+
+// —— 反向：HTML 表格 → Markdown 表格 ——
+
+test('反向：本插件生成的 markup 原样还原', () => {
+	eq(
+		htmlToMarkdown(table('<th>a</th><th>b</th>', '<td>1</td><td>2</td>')),
+		'| a | b |\n| --- | --- |\n| 1 | 2 |',
+		'thead + tbody',
+	);
+});
+
+test('反向：第一行一律当表头，没有 thead 也认', () => {
+	eq(htmlToMarkdown('<table><tr><th>a</th></tr><tr><td>1</td></tr></table>'), '| a |\n| --- |\n| 1 |', '无 thead');
+	eq(htmlToMarkdown('<table><tr><td>a</td></tr></table>'), '| a |\n| --- |', '第一行是 td');
+	eq(
+		htmlToMarkdown('<table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'),
+		'| a |\n| --- |\n| 1 |',
+		'thead + tbody',
+	);
+});
+
+test('反向：对齐从表头行逐列读 align', () => {
+	eq(
+		htmlToMarkdown(
+			'<table><tr><th align="left">a</th><th align="right">b</th><th align="center">c</th></tr><tr><td>1</td><td>2</td><td>3</td></tr></table>',
+		),
+		'| a | b | c |\n| :--- | ---: | :---: |\n| 1 | 2 | 3 |',
+		'左 / 右 / 中',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><th>a</th></tr><tr><td align="right">1</td></tr></table>'),
+		'| a |\n| --- |\n| 1 |',
+		'属性顺序与引号都容忍；数据行的 align 不参与（对齐只看表头行）',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><th align="justify">a</th></tr></table>'),
+		'| a |\n| --- |',
+		'表达不了的对齐退回不指定',
+	);
+});
+
+test('反向：单元格里的字面竖线补上反斜杠', () => {
+	eq(htmlToMarkdown('<table><tr><td>a|b</td></tr></table>'), '| a\\|b |\n| --- |', 'a|b');
+});
+
+test('反向：表格前面补够空行（表格必须起一个块）', () => {
+	eq(
+		htmlToMarkdown('text<br><table><tr><th>a</th></tr></table>'),
+		'text\n\n| a |\n| --- |',
+		'同一行还有内容 → 补一个空行',
+	);
+	eq(
+		htmlToMarkdown('text<br><br><table><tr><th>a</th></tr></table>'),
+		'text\n\n| a |\n| --- |',
+		'已有空行 → 不再补',
+	);
+	eq(htmlToMarkdown('<table><tr><th>a</th></tr></table>'), '| a |\n| --- |', '块首 → 不补');
+	eq(
+		htmlToMarkdown('<table><tr><th>a</th></tr></table><table><tr><th>b</th></tr></table>'),
+		'| a |\n| --- |\n\n| b |\n| --- |',
+		'两张相邻的表之间补空行',
+	);
+});
+
+test('反向：畸形表格整段原样保留（不猜、不修复）', () => {
+	eq(htmlToMarkdown('<table></table>'), '<table></table>', '没有 tr');
+	eq(htmlToMarkdown('<table><tr><th>a</th></tr>'), '<table><tr><th>a</th></tr>', '缺 </table>');
+	eq(htmlToMarkdown('<table><tr><td>a</tr></table>'), '<table><tr><td>a</tr></table>', '单元格缺闭标签');
+	eq(
+		htmlToMarkdown('<table><tr><th>a</th><th>b</th></tr><tr><td>1</td></tr></table>'),
+		'<table><tr><th>a</th><th>b</th></tr><tr><td>1</td></tr></table>',
+		'格数与表头行不一致（Markdown 表格必须矩形）',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><th colspan="2">a</th></tr><tr><td>1</td><td>2</td></tr></table>'),
+		'<table><tr><th colspan="2">a</th></tr><tr><td>1</td><td>2</td></tr></table>',
+		'合并单元格表达不了',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><th style="text-align:left">a</th></tr></table>'),
+		'<table><tr><th style="text-align:left">a</th></tr></table>',
+		'style 不猜',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><th>a</th></tr><tr><td><br></td></tr></table>'),
+		'<table><tr><th>a</th></tr><tr><td><br></td></tr></table>',
+		'单元格里含换行',
+	);
+	eq(
+		htmlToMarkdown('<table><div>x</div></table>'),
+		'<table><div>x</div></table>',
+		'表格里夹着别的元素',
+	);
+	eq(
+		htmlToMarkdown('<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>'),
+		'<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>',
+		'嵌套表格',
+	);
+});
+
+test('反向：colspan="1" 与不写等价，照常还原', () => {
+	eq(htmlToMarkdown('<table><tr><th colspan="1">a</th></tr></table>'), '| a |\n| --- |', 'colspan="1"');
+});
+
+test('反向：表格里的行内标签照常还原', () => {
+	eq(
+		htmlToMarkdown('<table><tr><th><strong>粗</strong></th></tr><tr><td><mark>高</mark></td></tr></table>'),
+		'| **粗** |\n| --- |\n| ==高== |',
+		'格内行内标签',
+	);
+});
+
+test('表格的 markdownToHtml → htmlToMarkdown 往返（按既定归一化）', () => {
+	const cases = [
+		['| a | b |\n| - | - |\n| 1 | 2 |', '| a | b |\n| --- | --- |\n| 1 | 2 |'],
+		['a | b\n--- | ---\n1 | 2', '| a | b |\n| --- | --- |\n| 1 | 2 |'],
+		['| a | b |\n| :--- | ---: |\n| 1 | 2 |', '| a | b |\n| :--- | ---: |\n| 1 | 2 |'],
+		['| a\\|b | c |\n| - | - |', '| a\\|b | c |\n| --- | --- |'],
+		[
+			'text\n\n| a | b |\n| - | - |\n| 1 | 2 |\nafter',
+			'text\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\nafter',
+		],
+	];
+	for (const [input, expected] of cases) {
+		assert.equal(htmlToMarkdown(innerOf(markdownToHtml(input, 'div'))), expected, `往返失败，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+test('不变量：表格过一次转换后往返稳定（再转一遍不再变）', () => {
+	const cases = [
+		'| a | b |\n| - | - |\n| 1 | 2 |',
+		'a | b\n--- | ---\n1 | 2',
+		'text\n\n| a | b |\n| - | - |',
+		'| a | b |\n| - | - |\n| 1 | 2 |\nafter',
+		'| a |\n| - |\n| 1 | 2 | 3 |',
+	];
+	for (const input of cases) {
+		const once = htmlToMarkdown(innerOf(markdownToHtml(input, 'div')));
+		const twice = htmlToMarkdown(innerOf(markdownToHtml(once, 'div')));
+		assert.equal(twice, once, `往返不稳定，输入: ${JSON.stringify(input)}`);
+	}
+});
+
 // —— 缩进守卫 ——
 
 test('首行缩进 0–3 个空格通过，4 个空格或含制表符被拒绝', () => {
