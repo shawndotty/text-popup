@@ -1,1 +1,2 @@
 - convert Markdown ATX headings (# … ######) to real h1–h6 in `Popup Selected Text` and back in `Unpopup Selected Text`, so the text after a heading is no longer swallowed into the heading; a table may now start right below a heading line
+- convert Markdown table to HTML table and vice versa.
