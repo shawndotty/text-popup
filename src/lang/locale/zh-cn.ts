@@ -37,8 +37,8 @@ const zhCN: Partial<typeof en> = {
 	'Follow theme': '跟随主题',
 
 	// —— 命令名 · 右键菜单项 ——
-	'Popup selected text': '放大选中文本',
-	'Unpopup selected text': '还原选中文本',
+	'Popup selected text': 'Popup选中文本',
+	'Unpopup selected text': 'Unpopup选中文本',
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '请在单光标下使用',

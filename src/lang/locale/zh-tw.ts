@@ -38,8 +38,8 @@ const zhTW: Partial<typeof en> = {
 	'Follow theme': '跟隨主題',
 
 	// —— 命令名 · 右鍵選單項目 ——
-	'Popup selected text': '放大選取文字',
-	'Unpopup selected text': '還原選取文字',
+	'Popup selected text': 'Popup選取文字',
+	'Unpopup selected text': 'Unpopup選取文字',
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '請在單游標下使用',
