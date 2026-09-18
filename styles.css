@@ -156,11 +156,30 @@
 	padding: 6px 12px;
 }
 
-/* iframe 容器宽度控制 */
+/* iframe：先把容器宽度钉成确定值，否则 iframe 的百分比宽度会退回 UA 默认的 300px。
+   iframe 的 width="100%" 相对**包含块**解析，而 .text-popup-text 是 flex 项、width: auto 时
+   按内容收缩 —— 百分比宽度进了循环引用，浏览器只能按 UA 默认宽度落定。
+   实测：笔记里 width="100%" height="600" 的 iframe 在弹窗里是 300×600（宽度被压成 300）。
+   给容器 width: 100%（= 内容区宽度）即可打破循环，iframe 的 width="100%" 立刻落到真实宽度：
+   同一弹窗实测 1353×600。
+   min-width: 100% 与上面 pre / Callout 那条同源：把 flex 项的自动最小尺寸（内容的 min-content）
+   换成 100% —— 容器既拿得到确定宽度，也永远不会比内容区更宽（取 100% 而不是固定像素）。
+   :has() 只命中含 iframe 的块，其它块维持原来的按内容收缩（短文字仍居中）。
+   注：iframe 是行内替换元素，行盒会在它下方多出一点基线间隙（实测 13px），与宽度无关，不处理。 */
 
 .mod-text-popup .text-popup-text.is-rich:has(iframe) {
 	width: 100%;
 	min-width: 100%;
+}
+
+/* iframe 写死像素宽（如 width="800"）时不该撑破弹窗：与上面 .is-rich img 同一条约定。
+   max-width 只在 iframe 比内容区更宽时才生效（窗口够宽时原样保留作者写的宽度）：
+   实测窄窗口下容器 372px、iframe 800px，会越过内容区右内边距并让内容区横向滚动
+   （scrollWidth 864 > clientWidth 500）；加上这条后 iframe = 372px、不再滚动。
+   只压宽度、不动 height 属性，纵向比例仍由作者决定。 */
+
+.mod-text-popup .text-popup-text.is-rich iframe {
+	max-width: 100%;
 }
 
 /* 底部控制条：字号 / 缩放 / 恢复默认 */
