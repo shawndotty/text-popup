@@ -339,14 +339,36 @@ test('hasBlockBody：正文里会不会出现块级元素', () => {
 	}
 });
 
-test('不变量：单行且不含块级元素 ⇔ 正文能用 p 装（没有 br、也没有列表）', () => {
-	const inputs = ['a', 'a\nb', '- a', '- a\n- b', 'text\n- a', '1. a', 'plain', 'a\n\nb', '-test'];
+test('不变量：单行且不含块级元素 ⇔ 正文能用 p 装（没有 br、也没有列表 / 标题）', () => {
+	const inputs = [
+		'a',
+		'a\nb',
+		'- a',
+		'- a\n- b',
+		'text\n- a',
+		'1. a',
+		'plain',
+		'a\n\nb',
+		'-test',
+		'## 标题',
+		'## T\nbody',
+		'text\n## T',
+		'## T\n| a | b |\n| - | - |',
+	];
 	for (const input of inputs) {
 		const generated = body(input);
 		const pSafe = isSingleLine(input) && !hasBlockBody(input);
 		assert.equal(
 			pSafe,
-			!generated.includes('<br>') && !generated.includes('<ul') && !generated.includes('<ol'),
+			!generated.includes('<br>') &&
+				!generated.includes('<ul') &&
+				!generated.includes('<ol') &&
+				!generated.includes('<h1') &&
+				!generated.includes('<h2') &&
+				!generated.includes('<h3') &&
+				!generated.includes('<h4') &&
+				!generated.includes('<h5') &&
+				!generated.includes('<h6'),
 			`p 可用性与生成结果不一致，输入: ${JSON.stringify(input)}`,
 		);
 	}
@@ -518,7 +540,12 @@ test('数据行的终止条件：空行 / 无竖线 / 缩进 ≥4 / 列表行 / 
 		'列表行终止',
 	);
 	eq(body('| a | b |\n| - | - |\n> q | q'), `${table('<th>a</th><th>b</th>')}<br>> q | q`, '引用行终止');
-	eq(body('| a | b |\n| - | - |\n# h | h'), `${table('<th>a</th><th>b</th>')}<br># h | h`, 'ATX 标题终止');
+	// ATX 标题同样终止表格；那一行自己按标题转（`# h | h` 是标题，见分流顺序那条）
+	eq(
+		body('| a | b |\n| - | - |\n# h | h'),
+		`${table('<th>a</th><th>b</th>')}<br><h1>h | h</h1>`,
+		'ATX 标题终止',
+	);
 });
 
 test('分隔行出现在数据行位置时只是普通数据行', () => {
@@ -681,6 +708,148 @@ test('不变量：表格过一次转换后往返稳定（再转一遍不再变�
 		'| a |\n| - |\n| 1 | 2 | 3 |',
 	];
 	for (const input of cases) {
+		const once = htmlToMarkdown(innerOf(markdownToHtml(input, 'div')));
+		const twice = htmlToMarkdown(innerOf(markdownToHtml(once, 'div')));
+		assert.equal(twice, once, `往返不稳定，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+// —— 块级转换：Markdown ATX 标题 → HTML 标题 ——
+//
+// 标题的失效方式是**把同一行的后续内容吃进标题**：`## T<br>正文` 里的 `##` 范围到本行结束，
+// `<br>` 只是行内元素、不结束标题 —— 弹窗里于是只剩一个 h2，后文全变成标题文字。
+// 判据逐条对齐核心的 ATX 规则（缩进 0–3、`#` 后必须空白或行尾、尾部闭合串、转义），
+// **宁可漏判也不误判**；Setext 标题（`S\n===`）本次不做，见 README 的已知限制。
+
+test('判据矩阵：1–6 个 # 是标题，7 个 # 与 #nospace 不是', () => {
+	eq(body('# H'), '<h1>H</h1>', '# H');
+	eq(body('### H'), '<h3>H</h3>', '### H');
+	eq(body('###### H'), '<h6>H</h6>', '###### H');
+	eq(body('####### H'), '####### H', '7 个 # 是普通文本');
+	eq(body('#nospace'), '#nospace', '#nospace');
+});
+
+test('判据矩阵：分隔符是空格或 Tab，缩进 0–3 合法、4 是代码块', () => {
+	eq(body('#\tT'), '<h1>T</h1>', '# + Tab');
+	eq(body('#     T'), '<h1>T</h1>', '# + 多空格');
+	eq(body(' # T'), '<h1>T</h1>', '缩进 1');
+	eq(body('   ### T'), '<h3>T</h3>', '缩进 3');
+	eq(body('    # T'), '    # T', '缩进 4 = 缩进代码块');
+	eq(body('\\# T'), '\\# T', '反斜杠转义的 # 不是标题');
+});
+
+test('判据矩阵：尾部闭合串（空白 + 纯 #）去掉，空标题合法', () => {
+	eq(body('# T #'), '<h1>T</h1>', '# T #');
+	eq(body('# T ###'), '<h1>T</h1>', '# T ###');
+	eq(body('# T ####   '), '<h1>T</h1>', '# T #### + 尾空格');
+	eq(body('# T #extra'), '<h1>T #extra</h1>', '闭合串必须是纯 #');
+	eq(body('# T \\#'), '<h1>T \\#</h1>', '被转义的 # 不算闭合串');
+	eq(body('# T#'), '<h1>T#</h1>', '闭合串前面必须有空白');
+	eq(body('#'), '<h1></h1>', '裸 #');
+	eq(body('###'), '<h3></h3>', '空的三级标题');
+});
+
+test('正向 markup：标题转成 hN，后文留在标题外面（用户报的那一条）', () => {
+	eq(
+		body('## Test Heading\n蜀之鄙有二僧：其一贫，其一富。'),
+		'<h2>Test Heading</h2><br>蜀之鄙有二僧：其一贫，其一富。',
+		'## Test Heading + 正文',
+	);
+});
+
+test('标题文字走同一套行内转换', () => {
+	eq(body('## **粗** 与 `码`'), '<h2><strong>粗</strong> 与 <code>码</code></h2>', '行内标记');
+	eq(body('## 中文标题'), '<h2>中文标题</h2>', '与语言无关');
+});
+
+test('分流顺序：标题先于表格', () => {
+	// 核心把 `# x | y` + `| - | - |` 判成标题 + 段落（分隔行没有表头行就不能成表）
+	eq(body('# x | y\n| - | - |'), '<h1>x | y</h1><br>| - | - |', '# x | y + | - | - |');
+	// 既有实测：`- a | b` + `--- | ---` 是表格（表格先于列表），不受标题分流影响
+	eq(body('- a | b\n--- | ---'), table('<th>- a</th><th>b</th>'), '- a | b + --- | ---');
+});
+
+test('表格可以紧跟在标题后面（上一行是标题也算「起一个块」）', () => {
+	eq(
+		body('## T\n| a | b |\n| - | - |'),
+		`<h2>T</h2><br>${table('<th>a</th><th>b</th>')}`,
+		'## T + 表格（无空行）',
+	);
+});
+
+test('标题紧邻列表：两侧各一个 br，标题压在正文那一行里', () => {
+	eq(body('- aa\n## T'), '<ul><li>aa</li></ul><br><h2>T</h2>', '- aa + ## T');
+	eq(body('## H\n- a\n- b'), '<h2>H</h2><br><ul><li>a</li><li>b</li></ul>', '## H + 列表');
+	eq(body('正文\n## T'), '正文<br><h2>T</h2>', '正文 + ## T（ATX 能打断段落）');
+});
+
+test('列表项里的标题与引用行里的标题都不处理（既有边界）', () => {
+	eq(body('- # T'), '<ul><li># T</li></ul>', '列表项内的 # 保持字面');
+	eq(body('> #### T'), '> #### T', '引用行留给原文（弹窗里 > 会被序列化成 &gt;）');
+});
+
+test('正文压在单行里：标题不引入裸换行', () => {
+	const html = markdownToHtml('## H\n正文\n- a\n| x | y |\n| - | - |', 'div');
+	assert.ok(!innerOf(html).includes('\n'), '正文不应含裸换行');
+});
+
+test('hasBlockBody：标题算块级正文（单行选区不能用 p 外壳）', () => {
+	for (const input of ['## 标题', '## T\nbody', 'text\n## T', '###', '# T#', '# T \\#']) {
+		assert.equal(hasBlockBody(input), true, `应判为含块级元素，输入: ${JSON.stringify(input)}`);
+	}
+	for (const input of ['####### x', '#nospace', '\\# x', '    # x', 'a', '']) {
+		assert.equal(hasBlockBody(input), false, `不该判为含块级元素，输入: ${JSON.stringify(input)}`);
+	}
+});
+
+// —— 反向：HTML 标题 → Markdown ATX 标题 ——
+
+test('反向：h1–h6 还原成对应数量的 #', () => {
+	eq(htmlToMarkdown('<h1>T</h1>'), '# T', '<h1>');
+	eq(htmlToMarkdown('<h2>T</h2>'), '## T', '<h2>');
+	eq(htmlToMarkdown('<h6>T</h6>'), '###### T', '<h6>');
+	eq(htmlToMarkdown('<h3></h3>'), '###', '空标题不留尾空格');
+});
+
+test('反向：标题只需要一个换行（不像表格那样补整行空行）', () => {
+	eq(htmlToMarkdown('text<br><h2>T</h2>'), 'text\n## T', '前面已有换行时不补');
+	eq(htmlToMarkdown('text<h2>T</h2>'), 'text\n## T', '紧贴在文字后面时补一个换行');
+	eq(htmlToMarkdown('<h2>T</h2><br>body'), '## T\nbody', '标题后面照常');
+});
+
+test('反向：表达不了的标题整段原样保留（不猜、不降级）', () => {
+	eq(htmlToMarkdown('<h2 class="x">T</h2>'), '<h2 class="x">T</h2>', '带属性');
+	eq(htmlToMarkdown('<h2 style="color:red">T</h2>'), '<h2 style="color:red">T</h2>', '带 style');
+	eq(htmlToMarkdown('<h2>a<br>b</h2>'), '<h2>a<br>b</h2>', '内容含换行，Markdown 标题不能跨行');
+	eq(htmlToMarkdown('<h2>T'), '<h2>T', '缺闭标签');
+	eq(htmlToMarkdown('<h7>T</h7>'), '<h7>T</h7>', 'h7 不在 h1–h6 里');
+});
+
+test('反向：标题内容走同一条行内还原，且能与列表 / 表格共处', () => {
+	eq(htmlToMarkdown('<h2><strong>粗</strong> 与 <code>x</code></h2>'), '## **粗** 与 `x`', '行内标记');
+	eq(htmlToMarkdown('<ul><li>a</li></ul><h2>T</h2>'), '- a\n## T', '列表 + 标题');
+	eq(
+		htmlToMarkdown(`${table('<th>a</th><th>b</th>')}<h2>T</h2>`),
+		'| a | b |\n| --- | --- |\n## T',
+		'表格 + 标题（表格补空行、标题只补换行）',
+	);
+});
+
+test('标题的 markdownToHtml → htmlToMarkdown 往返（按既定归一化）', () => {
+	const roundTrip = (input) => htmlToMarkdown(innerOf(markdownToHtml(input, 'div')));
+
+	eq(roundTrip('## Test Heading\n蜀之鄙有二僧：其一贫，其一富。'), '## Test Heading\n蜀之鄙有二僧：其一贫，其一富。', '用户报的那一条');
+	eq(roundTrip('## T'), '## T', '单行标题');
+	eq(roundTrip('###'), '###', '空标题');
+	eq(roundTrip('## T ##'), '## T', '尾部闭合串不保留');
+	eq(roundTrip('#\tT'), '# T', '标记后的分隔空白归一成一个空格');
+	eq(roundTrip('   ## T'), '## T', '前导缩进被去掉（块内缩进没有语义）');
+	eq(roundTrip('## T\n| a | b |\n| - | - |'), '## T\n\n| a | b |\n| --- | --- |', '标题 + 表格');
+});
+
+test('不变量：标题过一次转换后往返稳定（再转一遍不再变）', () => {
+	const inputs = ['## Test Heading\n正文', '## T', '###', '## T ##', '#\tT', '   ## T', '## T\n| a | b |\n| - | - |'];
+	for (const input of inputs) {
 		const once = htmlToMarkdown(innerOf(markdownToHtml(input, 'div')));
 		const twice = htmlToMarkdown(innerOf(markdownToHtml(once, 'div')));
 		assert.equal(twice, once, `往返不稳定，输入: ${JSON.stringify(input)}`);

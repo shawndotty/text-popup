@@ -9,8 +9,10 @@
  *   第一段第一行<br>第一段第二行<br><br>第二段
  *   </div>
  *
- * 列表与**表格**是两个「留原文就彻底失效」的块级语法（`- a<br>- b` 在编辑器与弹窗里都不会成列表；
- * `| a |<br>| - |` 同理），所以它们被特判成真正的 HTML 元素，压在正文那一行里：
+ * 列表、**表格**与**标题**是三个「留原文就失效」的块级语法 —— 只不过失效方式不同：列表与表格是
+ * 「两边都不成列表 / 不成表格」（`- a<br>- b`、`| a |<br>| - |`），标题则是**把同一行的后续内容吃进标题**
+ * （`## T<br>正文` 里的 `##` 范围到本行结束，`<br>` 只是行内元素、不结束标题）。所以它们都被特判成
+ * 真正的 HTML 元素，压在正文那一行里：
  *
  *   <div>
  *   文字<br><ul><li>一项</li><li>二项</li></ul><br>文字
@@ -20,28 +22,40 @@
  *   文字<br><table><thead><tr><th>a</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>
  *   </div>
  *
+ *   <div>
+ *   <h2>标题</h2><br>正文
+ *   </div>
+ *
+ * 标题元素**不带任何属性**：ATX 语法表达不了它们，带属性会让反向还原无从下手（见 §反向的标题分支）。
+ *
  * **三条**来自既有实现的硬约束：
  * - **块里不能有空行**：块级原始 HTML 到第一个空行就结束（`blocks.ts` 的 `matchHtmlBlock`），
  *   一旦生成空行，块会被截断、后半段掉出弹窗。正文写成**独占一行的单行**，结构上不可能有空行。
  * - **正文里的行结构不能用 `<p>`**：`<p><p>a</p><p>b</p></p>` 会被 HTML 解析器拆开，
  *   `findSupportedElement`（`tags.ts`）命中的是第一个空 `<p>`，`hasContent` 为假 → 块直接不算候选。
  *   用 `<br>` 表达换行，则 `div` / `p` / `section` 等任意块级标签都是合法嵌套。
- * - **正文里的块级元素只能是 `ul` / `ol` / `table`**（以及它们的 `li` / `tr` / `th` / `td`），且只画在
- *   正文那一行里，不引入换行。
- *   推论：**含列表的正文不能拿 `p` 当外壳** —— 解析器在「in body」插入模式下遇到 `<ul>` 会自动闭合
- *   未闭合的 `<p>`，末尾那个孤立 `</p>` 还会再补出一个**空 `<p>`**，`findSupportedElement` 命中的
- *   就是这个空元素 → `hasContent` 为假 → 块没有放大图标。命令层因此把「选区正文含列表」判成多行形态
- *   （`hasBlockBody`），并给 `resolvePopupTag` 加了一条 `p` 守卫兜底。
+ * - **正文里的块级元素只能是 `h1`–`h6` / `ul` / `ol` / `table`**（以及它们的 `li` / `tr` / `th` / `td`），
+ *   且只画在正文那一行里，不引入换行。
+ *   推论：**含块级元素的正文不能拿 `p` 当外壳** —— 解析器在「in body」插入模式下遇到 `<ul>`（`<hN>` 同理）
+ *   会自动闭合未闭合的 `<p>`，末尾那个孤立 `</p>` 还会再补出一个**空 `<p>`**，`findSupportedElement`
+ *   命中的就是这个空元素 → `hasContent` 为假 → 块没有放大图标。命令层因此把「选区正文含列表 / 标题」
+ *   判成多行形态（`hasBlockBody`），并给 `resolvePopupTag` 加了一条 `p` 守卫兜底。
  *   （`<table>` 不受这条约束：解析器不拿它闭合 `<p>`，实测 `<p><table>` 在弹窗里照常出表格。
  *   表格天然 ≥2 行（表头 + 分隔行）→ 永远走多行标签，`hasBlockBody` 对它没有意义。）
  *
  * 表格的判据逐条对齐核心（markdown-it 的 `table` 规则），**宁可漏判也不误判**：
- * - **必须起一个块**：表头行前面得是空行或选区开头（`text` 紧邻表头只是一段带竖线的普通文字）；
+ * - **必须起一个块**：表头行前面得是空行、选区开头、或**一个 ATX 标题行**（`text` 紧邻表头只是一段
+ *   带竖线的普通文字；标题不会「懒惰续行」吃表头行，实测核心在标题的下一行无空行也认表格）；
  * - 表头行与**分隔行**都必须含**未转义的** `|`（否则 `a` + `---` 是 Setext 标题；`| a |` + `---`
  *   同样是 Setext 标题，实测核心在阅读视图里给出 `h2` 而不是表格 —— 只有 `| a |` + `| - |` 才是单列表格）；
  * - 列数取**分隔行**的格数，表头行与数据行一律按它截断 / 补空；
  * - 数据行遇到空行、缩进 ≥4、不含未转义 `|`、列表行、引用行、ATX 标题即终止（表格后面不需要空行）；
- * - 分流顺序 `table` → `list` → 普通行，与核心的 block 规则顺序一致（`- a | b` + `--- | ---` 是表格）。
+ * - 分流顺序 `heading` → `table` → `list` → 普通行，与核心的 block 规则顺序一致
+ *   （`# x | y` + `| - | - |` 是标题、`- a | b` + `--- | ---` 是表格 —— 只有这个顺序能同时满足两条）。
+ *
+ * 标题的判据同样逐条对齐核心的 ATX 规则，宁可漏判也不误判：缩进 0–3、`#` 后必须是空白或行尾、
+ * 1–6 个 `#`、尾部闭合串（空白 + 纯 `#`）去掉、行内照常走 `convertInline`。刻意不做 Setext 标题
+ * （`S\n===`）：往返必然变形，且 `===` / `---` 与分隔线、表格分隔行共享字符，判据面成倍扩大。
  *
 
  * 注意区分上面第二条与**外层标签**：外层标签用 `p`（单行选区的默认值）是合法的 ——
@@ -319,14 +333,15 @@ function splitListLine(line: string): ListLine | null {
 }
 
 /**
- * 正文里是否会出现块级元素（列表）。
+ * 正文里是否会出现块级元素（列表 / 标题）。
  *
  * 命令层用它把单行选区的判据从「没有 `<br>`」收紧成「没有 `<br>` 也没有块级元素」：
- * 正文里出现 `<ul>` / `<ol>` 时外壳不能用 `<p>`（见文件头第三条契约）。
+ * 正文里出现 `<ul>` / `<ol>` / `<h1>`–`<h6>` 时外壳不能用 `<p>`（见文件头第三条契约：
+ * 它们都会被解析器用来闭合未闭合的 `<p>`，末了再补出一个空 `<p>` → 幽灵块）。
  * 与 `isSingleLine` 共用 `bodyLines`，判定与生成不会漂移。
  */
 export function hasBlockBody(text: string): boolean {
-	return bodyLines(text).some((line) => splitListLine(line) !== null);
+	return bodyLines(text).some((line) => splitListLine(line) !== null || matchHeading(line) !== null);
 }
 
 /** 一个列表层：同缩进、同 kind 的一串项。 */
@@ -411,6 +426,55 @@ function renderListBlocks(blocks: readonly ListBlock[]): string {
 	}
 
 	return out;
+}
+
+// —— 块级转换：Markdown ATX 标题 → HTML 标题 ——
+//
+// 标题的失效方式与列表 / 表格不同：它**不**是「两边都不成立」，而是**把同一行的后续内容吃进标题**。
+// `## Test Heading` 与后文被 `<br>` 压成一行后，`##` 的作用范围是「到本行结束」，而 `<br>` 只是行内
+// 元素 —— 弹窗里于是只剩一个 `h2`，后文全变成标题文字（编辑器里则多显示一个 `##`，两头都不对）。
+// 所以标题从「有意不转」名单里移出来，进入列表 / 表格那一类：转成真正的 HTML 标题，压在正文那一行里。
+
+/** 一行原文切片成的 ATX 标题；不是标题行时 `matchHeading` 返回 null。 */
+interface HeadingLine {
+	/** 1–6。 */
+	level: number;
+	/** 标题文字（已去掉标记、尾部闭合串与两侧空白）。 */
+	content: string;
+}
+
+/**
+ * 从一行原文里认出 ATX 标题；判据逐条对齐核心，**宁可漏判也不误判**：
+ *
+ * - 缩进 ≥4 / 含 Tab（`hasCodeIndent`）是缩进代码块，不是标题；
+ * - `^ {0,3}(#{1,6})(?=[ \t]|$)`：0–3 个前导空格、1–6 个 `#`、`#` 后必须是空白或行尾 ——
+ *   7 个 `#`、`#nospace` 因此天然不命中；
+ * - 尾部闭合串（**空白引出**的纯 `#` 串，如 `## T ##`）去掉；`# T#` / `# T \#` 因缺少那个空白而不算
+ *   闭合串，整段留在标题文字里；
+ * - 空的 `#` / `###` 是合法标题（内容为空）。
+ */
+function matchHeading(line: string): HeadingLine | null {
+	if (hasCodeIndent(line)) return null;
+
+	const match = /^ {0,3}(#{1,6})(?=[ \t]|$)/.exec(line);
+	const marker = match?.[1];
+	if (!marker) return null;
+
+	const content = line
+		.slice(match[0].length)
+		.replace(/[ \t]+#+[ \t]*$/, '')
+		.trim();
+
+	return { level: marker.length, content };
+}
+
+/**
+ * 标题 → HTML。markup **不带任何属性**：核心自己在 HTML 块里的标题也不带（弹窗里那个 `dir="auto"`
+ * 是渲染器加的、不是源码里的），而属性会成为反向时「Markdown 表达不了」的整段保留判据。
+ * 标题文字走 `convertInline`，与列表项、表格单元格同一条路。
+ */
+function renderHeading(heading: HeadingLine): string {
+	return `<h${heading.level}>${convertInline(heading.content)}</h${heading.level}>`;
 }
 
 // —— 块级转换：Markdown 表格 → HTML 表格 ——
@@ -554,8 +618,12 @@ function fitRow(cells: readonly string[], columns: number): string[] {
  * 下一行必须是合法分隔行；数据行往下吃到第一个终止行为止。
  */
 function matchTable(lines: readonly string[], start: number): TableBlock | null {
-	// 必须起一个块：紧跟在正文后面的表头行只是一段带竖线的普通文字
-	if (start > 0 && (lines[start - 1] ?? '').trim() !== '') return null;
+	// 必须起一个块：紧跟在正文后面的表头行只是一段带竖线的普通文字。
+	// 例外是 ATX 标题 —— 标题不会「懒惰续行」吃掉表头行，实测核心在标题的下一行无空行也认表格。
+	if (start > 0) {
+		const prev = lines[start - 1] ?? '';
+		if (prev.trim() !== '' && !matchHeading(prev)) return null;
+	}
 
 	const headerLine = lines[start] ?? '';
 	if (hasCodeIndent(headerLine)) return null;
@@ -614,15 +682,23 @@ function renderTableHtml(table: TableBlock): string {
 }
 
 /**
- * 正文行 → HTML：连续的列表行归成一段渲染成列表元素，连续的表格行渲染成 `<table>`，
- * 其余行照旧逐行走行内转换。行与行、段与段之间一律用 `<br>` 连接 ——
- * 列表与表格元素因此压在正文那一行里，块里不会出现空行。
+ * 正文行 → HTML：ATX 标题行渲染成 `<hN>`、连续的列表行归成一段渲染成列表元素、
+ * 连续的表格行渲染成 `<table>`，其余行照旧逐行走行内转换。行与行、段与段之间一律用 `<br>` 连接 ——
+ * 标题 / 列表 / 表格元素因此压在正文那一行里，块里不会出现空行。
  */
 function renderBody(lines: readonly string[]): string {
 	const parts: string[] = [];
 	let index = 0;
 
 	while (index < lines.length) {
+		// 标题先于表格：核心把 `# x | y` + `| - | - |` 判成标题 + 段落（见文件头的判据顺序）
+		const heading = matchHeading(lines[index] ?? '');
+		if (heading) {
+			parts.push(renderHeading(heading));
+			index += 1;
+			continue;
+		}
+
 		// 表格先于列表：核心的 block 规则里 table 也排在 list 之前（`- a | b` + `--- | ---` 是表格）
 		const table = matchTable(lines, index);
 		if (table) {
@@ -1009,6 +1085,36 @@ function readTableElement(text: string, at: number): { markdown: string; end: nu
 	return { markdown: lines.join('\n'), end };
 }
 
+/** 标题层级表：`h1`…`h6` → 1…6。不在表里的标签名一律不认。 */
+const HEADING_LEVELS: Readonly<Record<string, number>> = { h1: 1, h2: 2, h3: 3, h4: 4, h5: 5, h6: 6 };
+
+/**
+ * 解析一个标题元素（`<h1>`…`<h6>`）→ ATX 标题。
+ *
+ * 表达不了就返回 null，由调用方把**整段**原样保留（不猜、不降级、不丢信息，与畸形列表 / 表格同待遇）：
+ *
+ * - 开标签带任何属性（`id` / `class` / `align` / `style`…）：ATX 语法表达不了；
+ * - 找不到配对的 `</hN>`；
+ * - 内容还原后含换行（里面有 `<br>`、嵌套列表 / 表格）：Markdown 标题不能跨行 —— 顺带修掉
+ *   `<h2>a<br>b</h2>` 过去被还原成 `<h2>a\nb</h2>` 那个半吊子产物。
+ *
+ * 空标题（`<h3></h3>`）只输出 `#`×N，不留尾空格。
+ */
+function readHeadingElement(text: string, at: number, level: number): { markdown: string; end: number } | null {
+	const head = readTag(text, at);
+	if (!head || head.closing || HEADING_LEVELS[head.name] !== level) return null;
+	if (tagAttributes(head.raw).trim() !== '') return null;
+
+	const close = readClosingTag(text, head.name, at + head.raw.length);
+	if (!close) return null;
+
+	const content = convertInlineBack(text.slice(at + head.raw.length, close.start)).trim();
+	if (content.includes('\n')) return null;
+
+	const marker = '#'.repeat(level);
+	return { markdown: content ? `${marker} ${content}` : marker, end: close.end };
+}
+
 /**
  * 表格前面补够空行：Markdown 里表格必须**起一个块**（表头行前面得是空行或文档开头），
  * 否则 `text` + 换行 + 表头只会是一段带竖线的普通文字。
@@ -1017,6 +1123,16 @@ function readTableElement(text: string, at: number): { markdown: string; end: nu
 function ensureBlockBreak(out: string): string {
 	if (out === '' || out.endsWith('\n\n')) return out;
 	return out.endsWith('\n') ? `${out}\n` : `${out}\n\n`;
+}
+
+/**
+ * 标题前面保证有换行就够了 —— **不需要表格那种整行空行**：ATX 标题能打断段落，
+ * 也能直接接在列表 / 表格后面（实测核心三种都成立）。所以 `<h2>` 前面若已有 `<br>`（→ 已是 `\n`），
+ * 一个字节都不补。
+ */
+function ensureLineBreak(out: string): string {
+	if (out === '' || out.endsWith('\n')) return out;
+	return `${out}\n`;
 }
 
 /**
@@ -1098,6 +1214,22 @@ function convertInlineBack(text: string): string {
 			}
 			// 畸形表格：整段原样保留，与畸形列表同待遇
 			const end = skipElement(text, at, 'table');
+			out += text.slice(at, end);
+			index = end;
+			continue;
+		}
+
+		const headingLevel = tag && !tag.closing ? HEADING_LEVELS[tag.name] : undefined;
+		if (tag && !tag.closing && headingLevel !== undefined) {
+			const heading = readHeadingElement(text, at, headingLevel);
+			if (heading) {
+				// 标题只需要一个换行（能打断段落、也能紧跟在列表 / 表格后面），与表格那条不同
+				out = ensureLineBreak(out) + heading.markdown;
+				index = heading.end;
+				continue;
+			}
+			// 表达不了的标题（带属性 / 含换行 / 缺闭标签）：整段原样保留，与畸形列表同待遇
+			const end = skipElement(text, at, tag.name);
 			out += text.slice(at, end);
 			index = end;
 			continue;

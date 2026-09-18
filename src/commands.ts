@@ -102,7 +102,8 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 	}
 
 	// 标签依赖已取到的选区文本：单行 / 多行各取一个设置项，不合法时按同一套判据拒绝。
-	// 正文含列表时按多行走：`p` 遇到 `<ul>` 会被解析器自动闭合、再补一个空 `p` → 块没有放大图标。
+	// 正文含块级元素（列表 / 标题）时按多行走：`p` 遇到 `<ul>` / `<hN>` 会被解析器自动闭合、
+	// 再补一个空 `p` → 块没有放大图标（幽灵块）。
 	const blockBody = hasBlockBody(text);
 	const tag = resolvePopupTag(host.settings, isSingleLine(text) && !blockBody, blockBody);
 	if (!tag) {
@@ -203,8 +204,9 @@ function lineStartOffset(text: string, line: number): number {
  * 包裹标签必须同时是块级标签、且在「支持的标签」里，否则块不会生成、或生成了也没有放大图标。
  * 按选区是否为单行取对应的设置项（单行选中 `singleLineTag`，含换行选中 `multiLineTag`）。
  *
- * `hasBlock`（正文里会出现列表）时把 `p` 判为不合法：解析器遇到 `<ul>` 会自动闭合未闭合的 `<p>`
- * 并补出一个空 `<p>`，`findSupportedElement` 命中的正是那个空元素 → 块没有放大图标（幽灵块）。
+ * `hasBlock`（正文里会出现块级元素：列表 / 标题）时把 `p` 判为不合法：解析器遇到 `<ul>` / `<hN>`
+ * 会自动闭合未闭合的 `<p>` 并补出一个空 `<p>`，`findSupportedElement` 命中的正是那个空元素 →
+ * 块没有放大图标（幽灵块）。
  * 即便你把多行标签**显式**设成 `p`，这里也只让命令层弹一次既有文案的 Notice、一个字节都不改。
  */
 function resolvePopupTag(settings: TextPopupSettings, singleLine: boolean, hasBlock = false): string | null {
