@@ -28,6 +28,20 @@
 	color: var(--text-normal);
 }
 
+/* 让 chip 里核心自带的复制图标与放大图标落在同一条中线上。
+   放大图标是 inline-flex + vertical-align: middle，对齐的是「基线 + x-height/2」；
+   而核心 .svg-icon 用默认的 baseline 对齐 —— 整个图标坐在基线上，中心落在基线上方
+   半个图标高（8px），比放大图标高约 4.8px。有语言名时 chip 里是文本节点（贴基线的是文字本身，
+   两者观感一致），没有语言名时换成复制图标，这 4.8px 就露出来了：
+   同一个放大图标在两种代码块里一高一低。
+   把 chip 内的 svg 也设成 middle，三种内容（放大图标 / 语言名文字 / 复制图标）就都用
+   同一条中线对齐，chip 高度也统一为 26px。
+   :has() 限定只作用于「本插件注入过按钮」的 chip，不干扰其它代码块。 */
+
+.markdown-source-view.mod-cm6 .code-block-flair:has(> .text-popup-flair-action) > .svg-icon {
+	vertical-align: middle;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。
