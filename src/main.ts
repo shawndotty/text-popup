@@ -1,4 +1,5 @@
 import { Plugin } from 'obsidian';
+import { registerCommands } from './commands';
 import { registerBlockScanner, removeAllActions } from './scanner';
 import { normalizeSettings, TextPopupSettingTab, TextPopupSettings } from './settings';
 
@@ -10,6 +11,7 @@ export default class TextPopupPlugin extends Plugin {
 
 		this.addSettingTab(new TextPopupSettingTab(this.app, this));
 		registerBlockScanner(this);
+		registerCommands(this);
 	}
 
 	onunload(): void {

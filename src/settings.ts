@@ -1,4 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
+import type { DropdownComponent } from 'obsidian';
+import { isBlockLevelTag } from './blocks';
 import type TextPopupPlugin from './main';
 import { refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
@@ -21,6 +23,8 @@ export interface TextPopupSettings {
 	supportedTags: string[];
 	/** 代码块 / Callout / 数学块是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
+	/** `Popup Selected Text` 用来包裹文本的标签；必须是 supportedTags 里的块级标签。 */
+	popupTag: string;
 }
 
 export const DEFAULT_SETTINGS: TextPopupSettings = {
@@ -31,6 +35,7 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
 	blockKinds: { code: true, callout: true, math: true },
+	popupTag: 'div',
 };
 
 export const FONT_SIZE_MIN = 12;
@@ -65,9 +70,21 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 	};
 }
 
+/**
+ * 包裹标签的约束式回落：必须同时「在支持列表里」与「是块级标签」才采纳，
+ * 否则取支持列表里第一个块级标签（列表里没有块级标签时回落到默认的 `div`）。
+ * 老 `data.json` 没有这个字段 → 自动补齐，不需要迁移脚本。
+ */
+export function resolvePopupTag(tag: unknown, supportedTags: readonly string[]): string {
+	const blockTags = supportedTags.filter(isBlockLevelTag);
+	if (typeof tag === 'string' && blockTags.includes(tag)) return tag;
+	return blockTags[0] ?? DEFAULT_SETTINGS.popupTag;
+}
+
 /** 把磁盘上可能残缺 / 过期的数据整理成一份完整设置。 */
 export function normalizeSettings(raw: unknown): TextPopupSettings {
 	const data = (raw ?? {}) as Partial<TextPopupSettings>;
+	const supportedTags = normalizeTagList(data.supportedTags);
 	return {
 		enabled: typeof data.enabled === 'boolean' ? data.enabled : DEFAULT_SETTINGS.enabled,
 		renderRichText:
@@ -80,13 +97,16 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 		),
 		popupTextColor: readString(data.popupTextColor, DEFAULT_SETTINGS.popupTextColor),
 		popupFontSize: clampFontSize(data.popupFontSize),
-		supportedTags: normalizeTagList(data.supportedTags),
+		supportedTags,
 		blockKinds: readBlockKinds(data.blockKinds),
+		popupTag: resolvePopupTag(data.popupTag, supportedTags),
 	};
 }
 
 export class TextPopupSettingTab extends PluginSettingTab {
 	private plugin: TextPopupPlugin;
+	/** 「包裹标签」下拉框；「支持的标签」改动把它挤掉时用它同步显示，不整页重绘。 */
+	private popupTagDropdown: DropdownComponent | null = null;
 
 	constructor(app: App, plugin: TextPopupPlugin) {
 		super(app, plugin);
@@ -178,10 +198,41 @@ export class TextPopupSettingTab extends PluginSettingTab {
 						const tags = normalizeTagList(value);
 						if (tags.join(',') === this.plugin.settings.supportedTags.join(',')) return;
 						this.plugin.settings.supportedTags = tags;
+						// 列表改小可能把当前包裹标签挤掉，顺手回落到下一个合法标签。
+						// 不整页重绘：那会让正在输入的这个文本框失焦。
+						const popupTag = resolvePopupTag(this.plugin.settings.popupTag, tags);
+						this.plugin.settings.popupTag = popupTag;
+						this.popupTagDropdown?.setValue(popupTag);
 						await this.plugin.saveSettings();
 						refreshTextPopupActions(this.plugin);
 					}),
 			);
+
+		this.addPopupTagSetting(containerEl);
+	}
+
+	/**
+	 * 包裹标签：`Popup Selected Text` 生成块时用的外层标签。
+	 * 选项只取「支持的标签」里的块级标签 —— 行内标签（`span` 等）生成的块不会有放大图标。
+	 */
+	private addPopupTagSetting(containerEl: HTMLElement): void {
+		const setting = new Setting(containerEl)
+			.setName('包裹标签')
+			.setDesc('转换命令用哪个块级标签包裹选中的文本；只有块级标签能生成可放大的块。');
+
+		setting.addDropdown((dropdown) => {
+			// 当前值一定留在选项里：否则 supportedTags 被改空后下拉框会显示成空白
+			const tags = new Set([
+				...this.plugin.settings.supportedTags.filter(isBlockLevelTag),
+				this.plugin.settings.popupTag,
+			]);
+			for (const tag of tags) dropdown.addOption(tag, tag);
+			dropdown.setValue(this.plugin.settings.popupTag).onChange(async (value) => {
+				this.plugin.settings.popupTag = resolvePopupTag(value, this.plugin.settings.supportedTags);
+				await this.plugin.saveSettings();
+			});
+			this.popupTagDropdown = dropdown;
+		});
 	}
 
 	/** 三类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。 */

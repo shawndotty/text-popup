@@ -53,6 +53,18 @@ interface BlockMatch {
 	include: boolean;
 }
 
+/**
+ * 该标签能否生成一个带放大图标的块。
+ *
+ * 两个条件都与核心对齐：在块级标签表里（否则按行内处理、不进候选），且不在核心的行内表里
+ * （`iframe` 同时出现在两张表中，核心给它建的是 `span` 容器，因此也不算）。
+ * 命令层的「包裹标签」必须过这一关，否则块生成了也不会有放大图标。
+ */
+export function isBlockLevelTag(tag: string): boolean {
+	const name = tag.trim().toLowerCase();
+	return BLOCK_TAGS.has(name) && !INLINE_TAGS.has(name);
+}
+
 /** 行首（≤3 个前导空格）是否为块级 HTML 起始标签；是则返回小写标签名。 */
 function matchBlockTag(line: string): string | null {
 	// CommonMark 类型 6：标签后必须是空白 / `/` / `>` / 行尾；4 空格缩进属于代码块，不算。
