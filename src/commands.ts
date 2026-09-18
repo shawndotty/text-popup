@@ -1,7 +1,8 @@
 /**
- * 两个转换命令 + 编辑器右键菜单项 —— 「取选区 → 守卫 → 转换 → 写回」的入口层。
+ * 两个转换命令 + 一个打开命令 + 编辑器右键菜单项 —— 「取选区 → 守卫 → 转换 → 写回」的入口层。
  *
  * 命令与菜单项共用 `popupSelection` / `unpopupSelection`，单一实现、两个入口，行为不会漂移。
+ * `Show Popup In The Note` 不进右键菜单（它不需要选区，菜单里也没有对应的上下文）。
  *
  * 为什么右键菜单要自己挂：核心只把带 `editorCallback` / `editorCheckCallback` 的命令登记进
  * `editorCommands` 表，而那张表只被移动端工具栏读取（已对照本机 `obsidian.asar` 的 `app.js`），
@@ -14,6 +15,7 @@ import { isBlockLevelTag, scanTextBlocks } from './blocks';
 import type { TextBlockRegion } from './blocks';
 import { findOuterPopupElement, hasBlockBody, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } from './convert';
 import { t } from './lang/helpers';
+import { openFirstTextPopup } from './scanner';
 import type { TextPopupSettings } from './settings';
 
 /** 命令层只需要插件的这几项能力，避免与 main.ts 形成循环依赖（与 scanner.ts 的 TextPopupHost 同一手法）。 */
@@ -50,6 +52,19 @@ export function registerCommands(host: CommandHost): void {
 		},
 	});
 
+	// 只要在编辑视图里就可用（不做「笔记里有 Popup」这类判定：那要在命令面板每次刷新时扫全文，
+	// 代价与收益不成比例）。editorCheckCallback 恒返回 true 的另一个好处是白拿核心合成的守卫：
+	// 阅读视图、没有活动编辑器、焦点在标题 / 属性区都不会触发。
+	host.addCommand({
+		id: 'show-popup-in-the-note',
+		name: t('Show Popup In The Note'),
+		icon: 'maximize-2',
+		editorCheckCallback: (checking, editor) => {
+			if (!checking) showFirstPopup(host, editor);
+			return true;
+		},
+	});
+
 	// 没有选区时不加这两项，避免给右键菜单添噪音；`selection` 段落在「打开」之后、剪贴板之前。
 	host.registerEvent(
 		host.app.workspace.on('editor-menu', (menu, editor) => {
@@ -68,6 +83,18 @@ export function registerCommands(host: CommandHost): void {
 			});
 		}),
 	);
+}
+
+/**
+ * Show Popup In The Note：直接打开当前笔记里的第一个可放大区块；一个都没有时提示用户。
+ *
+ * 候选集与「点放大图标」那条路径同源（见 `scanner.ts` 的 `openFirstTextPopup`），
+ * 所以提示的「没有」与方向键能翻到的条目永远一致。命令不改笔记、不改设置，只读 + 开弹窗。
+ */
+function showFirstPopup(host: CommandHost, editor: Editor): void {
+	if (!openFirstTextPopup(host, editor)) {
+		new Notice(t('No popup in the current note.'));
+	}
 }
 
 /** Popup：把选中的 Markdown 文本转成可放大的 HTML 块。 */

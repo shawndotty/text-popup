@@ -43,6 +43,7 @@ const zhTW: Partial<typeof en> = {
 	// —— 命令名 · 右鍵選單項目 ——
 	'Popup selected text': 'Popup選取文字',
 	'Unpopup selected text': 'Unpopup選取文字',
+	'Show Popup In The Note': '開啟目前筆記的第一個 Popup',
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '請在單游標下使用',
@@ -60,6 +61,7 @@ const zhTW: Partial<typeof en> = {
 		'選取範圍跨了多個放大區塊，一次只能還原一個',
 	'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.':
 		'找不到可還原的外層標籤，只支援「支援的標籤」裡的區塊層級標籤',
+	'No popup in the current note.': '目前筆記裡沒有可放大的區塊',
 
 	// —— 彈窗控制列與標題後備 ——
 	'Font size': '字型大小',

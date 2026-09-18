@@ -42,6 +42,7 @@ const zhCN: Partial<typeof en> = {
 	// —— 命令名 · 右键菜单项 ——
 	'Popup selected text': 'Popup选中文本',
 	'Unpopup selected text': 'Unpopup选中文本',
+	'Show Popup In The Note': '打开当前笔记的第一个 Popup',
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': '请在单光标下使用',
@@ -59,6 +60,7 @@ const zhCN: Partial<typeof en> = {
 		'选区跨了多个放大块，一次只能还原一个',
 	'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.':
 		'没找到可还原的外层标签，只支持「支持的标签」里的块级标签',
+	'No popup in the current note.': '当前笔记里没有可放大的区块',
 
 	// —— 弹窗控制条与标题兜底 ——
 	'Font size': '字号',

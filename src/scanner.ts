@@ -1,5 +1,5 @@
 import { debounce, MarkdownView, Platform, sanitizeHTMLToDom, setIcon } from 'obsidian';
-import type { App, Editor, EventRef } from 'obsidian';
+import type { App, Editor, EventRef, TFile } from 'obsidian';
 import { scanTextBlocks } from './blocks';
 import type { BlockKind, TextBlockRegion } from './blocks';
 import {
@@ -64,6 +64,15 @@ export interface TextPopupHost {
 	register(cleanup: () => void): void;
 	registerEvent(eventRef: EventRef): void;
 }
+
+/**
+ * 组装候选集 / 弹窗会话只需要这两项能力（注入用的 `register` / `registerEvent` 不在其中）。
+ *
+ * 拆出来是为了让命令层也能复用同一套组装：`commands.ts` 的 `CommandHost` 有 `app` 与
+ * `settings`、但不含 `register`，结构上正好满足这个更窄的类型，不必为了共用一个函数
+ * 而给命令层塞进它用不到的注册能力。
+ */
+type PopupSessionHost = Pick<TextPopupHost, 'app' | 'settings'>;
 
 /** 注册扫描：MutationObserver 覆盖编辑器重渲染，工作区事件覆盖切文件 / 切布局。 */
 export function registerBlockScanner(host: TextPopupHost): void {
@@ -151,13 +160,21 @@ interface PopupCandidate {
 
 /**
  * 离屏宿主：innerText 需要元素真实参与布局，所以不能用 display: none，只能移出可视区。
- * 挂在点击按钮所在的文档上，弹窗关闭时由 source.dispose 移除。
+ * 挂在按钮所在的文档上（命令入口用 `activeDocument`），弹窗关闭时由 source.dispose 移除。
  */
 function createOffscreenHost(doc: Document): HTMLElement {
-	return doc.body.createDiv({
+	const measureEl = doc.body.createDiv({
 		cls: MEASURE_CLASS,
 		attr: { 'aria-hidden': 'true' },
 	});
+	measureEl.setCssStyles({
+		position: 'fixed',
+		top: '0',
+		left: '-10000px',
+		width: '700px',
+		pointerEvents: 'none',
+	});
+	return measureEl;
 }
 
 /**
@@ -234,27 +251,70 @@ export function createTextPopupSource(
 	const editor = view?.editor ?? null;
 	const file = view?.file ?? host.app.workspace.getActiveFile();
 
+	const { candidates, source } = buildPopupSession(
+		host,
+		() => actionEl.ownerDocument,
+		editor,
+		file,
+	);
+	const startIndex = editor ? locateStartIndex(editor, actionEl, candidates) : 0;
+
+	return { source, startIndex };
+}
+
+/**
+ * 命令入口：直接打开当前笔记里的第一个可放大区块。
+ *
+ * 返回 `false` 表示「这篇笔记里没有可打开的块」，由调用方（命令层）负责提示 ——
+ * 提示文案属于入口层，与 `popupSelection` 那几条 Notice 放在一起。
+ *
+ * 与点放大图标共用 `buildPopupSession`：**候选集必须同源**，否则会出现「命令说没有、
+ * 方向键却能翻到」这类不一致。两者的差别只在起点固定为第一条 —— 命令没有可点的按钮，
+ * 不需要 `posAtDOM` 定位。
+ *
+ * 有意**不看** `settings.enabled`：那项的字面含义与设置页描述都是「显示放大图标」，
+ * 而命令是用户显式触发的，关掉图标后仍应能用（也能在移动端用 —— 那里根本不注入图标）。
+ * 三类区块各自的开关照旧生效：它们已经参与候选集过滤，定义「什么算一个 Popup」。
+ */
+export function openFirstTextPopup(host: PopupSessionHost, editor: Editor): boolean {
+	const file = host.app.workspace.getActiveFile();
+	const { source } = buildPopupSession(host, () => activeDocument, editor, file);
+	// 空块不弹窗：与点图标那条路径同一判据（`createActionEl` 里的 `open`）
+	if (!source.read(0)) {
+		source.dispose?.();
+		return false;
+	}
+	new TextPopupModal(host.app, source, 0, host.settings).open();
+	return true;
+}
+
+/**
+ * 扫描笔记文本 → 候选集 + 内容来源；点放大图标与命令两条入口共用这一份实现。
+ *
+ * @param getDoc 取离屏宿主所在文档，**传函数而不是 Document**：只有手写 HTML 块需要离屏渲染，
+ *   整篇没有可放大区块（或只有代码块 / Callout / 数学块）时一个游离节点都不建 —— 命令入口
+ *   因此不必在无手写 HTML 的笔记里碰 `activeDocument`。有 HTML 块时用按钮所在文档，
+ *   弹出式窗口（popout）里的测量才落在正确的文档上。
+ */
+function buildPopupSession(
+	host: PopupSessionHost,
+	getDoc: () => Document,
+	editor: Editor | null,
+	file: TFile | null,
+): { candidates: PopupCandidate[]; source: TextPopupSource } {
+	let measureEl: HTMLElement | null = null;
 	// 移出可视区但保持「被布局」：innerText 依赖布局，display: none 会让它退化成 textContent
-	const measureEl = createOffscreenHost(actionEl.ownerDocument);
-	measureEl.setCssStyles({
-		position: 'fixed',
-		top: '0',
-		left: '-10000px',
-		width: '700px',
-		pointerEvents: 'none',
-	});
+	const measure = (): HTMLElement => (measureEl ??= createOffscreenHost(getDoc()));
 
 	const candidates: PopupCandidate[] = [];
 	for (const region of editor ? scanTextBlocks(editor.getValue()) : []) {
 		if (!isKindEnabled(host.settings, region.kind)) continue;
-		const candidate = createCandidate(region, host, measureEl);
+		const candidate = createCandidate(region, host, measure);
 		if (candidate) candidates.push(candidate);
 	}
 
-	const startIndex = editor ? locateStartIndex(editor, actionEl, candidates) : 0;
-
 	return {
-		startIndex,
+		candidates,
 		source: {
 			// 快照：打开期间不再重采，标题的「总数 / 序号」与正文永远一致
 			get size(): number {
@@ -267,7 +327,7 @@ export function createTextPopupSource(
 				return candidates[index]?.read() ?? null;
 			},
 			dispose(): void {
-				measureEl.remove();
+				measureEl?.remove();
 			},
 		},
 	};
@@ -277,16 +337,17 @@ export function createTextPopupSource(
  * 一个区间 → 一个候选；内容为空（点了会弹空白屏）时返回 null。
  *
  * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素。
- * 另外三类是纯字符串处理，不需要 DOM，也不需要离屏宿主。
+ * 另外三类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
+ * 只有真的遇到 html 区间才会建出那个游离节点。
  */
 function createCandidate(
 	region: TextBlockRegion,
-	host: TextPopupHost,
-	measureEl: HTMLElement,
+	host: PopupSessionHost,
+	measure: () => HTMLElement,
 ): PopupCandidate | null {
 	if (region.kind === 'html') {
 		// 与核心 widget 同样的渲染方式（公开 API sanitizeHTMLToDom），结构与编辑器里同源
-		const holder = measureEl.createDiv();
+		const holder = measure().createDiv();
 		holder.appendChild(sanitizeHTMLToDom(region.raw));
 		const target = findSupportedElement(holder, host.settings.supportedTags);
 		if (!target || !hasContent(target)) return null;

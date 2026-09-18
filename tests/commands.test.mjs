@@ -1,5 +1,5 @@
 /**
- * `commands.ts` 的行为用例 —— 两个转换命令的守卫与写回。
+ * `commands.ts` 的行为用例 —— 两个转换命令的守卫与写回，以及 `Show Popup In The Note`。
  *
  * 这一层最容易出「静默改坏用户的笔记」的事故，所以断言分两类：
  * 1. 正常路径：写回的内容逐字节比对；
@@ -9,14 +9,17 @@
  * Notice 文案用 `t('...')` 取值而不是硬编码英文：V106 刚上多语言，硬编码会让用例
  * 在切语言时假绿（文案变了、断言还按英文过）。
  *
- * 需要 obsidian 桩（`Notice`）+ 假 Editor。假 Editor 只实现 commands.ts 用到的那几个成员
+ * `Show Popup In The Note` 只读笔记、开弹窗，没有写回路径，断言的是「弹窗开了没有」
+ * （`modals`）与「提示文案」两件事。
+ *
+ * 需要 obsidian 桩（`Notice` / `Modal`）+ 假 Editor。假 Editor 只实现 commands.ts 用到的那几个成员
  * （见下方 `createEditor`），不引入真实 CodeMirror。
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createJiti } from 'jiti';
-import { notices } from './stubs/obsidian.mjs';
+import { modals, notices } from './stubs/obsidian.mjs';
 
 const jiti = createJiti(import.meta.url, {
 	moduleCache: false,
@@ -28,6 +31,7 @@ const { t } = await jiti.import('../src/lang/helpers.ts');
 
 const POPUP = 'popup-selected-text';
 const UNPOPUP = 'unpopup-selected-text';
+const SHOW = 'show-popup-in-the-note';
 
 /** 假 Editor：以整篇字符串为文档，行/列与偏移量互转。只实现 commands.ts 用到的成员。 */
 function createEditor(text, options = {}) {
@@ -87,6 +91,8 @@ function createHost(settings = {}) {
 				app.handlers[type] = handler;
 				return { type };
 			},
+			// `Show Popup In The Note` 只为弹窗标题 / 链接基准取当前文件名，用例不需要真文件
+			getActiveFile: () => null,
 		},
 		handlers: {},
 	};
@@ -110,6 +116,7 @@ function runCommand(host, id, editor, checking = false) {
 	const command = host.commands.find((item) => item.id === id);
 	assert.ok(command, `命令未注册: ${id}`);
 	notices.length = 0;
+	modals.length = 0;
 	return command.editorCheckCallback(checking, editor);
 }
 
@@ -124,17 +131,19 @@ function expectRejected(host, id, editor, expectedText) {
 
 // —— 注册 ——
 
-test('恰好注册两个命令，id 与图标稳定', () => {
+test('恰好注册三个命令，id 与图标稳定', () => {
 	const host = createHost();
 	registerCommands(host);
 	assert.deepEqual(
 		host.commands.map((command) => command.id),
-		[POPUP, UNPOPUP],
+		[POPUP, UNPOPUP, SHOW],
 	);
 	assert.equal(host.commands[0].icon, 'maximize-2', 'popup 图标');
 	assert.equal(host.commands[1].icon, 'minimize-2', 'unpopup 图标');
+	assert.equal(host.commands[2].icon, 'maximize-2', 'show popup 图标');
 	assert.equal(host.commands[0].name, t('Popup selected text'), 'popup 名称取当前语言');
 	assert.equal(host.commands[1].name, t('Unpopup selected text'), 'unpopup 名称取当前语言');
+	assert.equal(host.commands[2].name, t('Show Popup In The Note'), 'show popup 名称取当前语言');
 	assert.equal(host.events.length, 1, '右键菜单事件只注册一次');
 	assert.equal(typeof host.app.handlers['editor-menu'], 'function', '监听 editor-menu');
 });
@@ -145,6 +154,85 @@ test('没有选区时命令在面板里灰掉（editorCheckCallback 返回 false
 	const editor = createEditor('abc', { from: { line: 0, ch: 1 }, to: { line: 0, ch: 1 } });
 	assert.equal(runCommand(host, POPUP, editor, true), false, 'popup');
 	assert.equal(runCommand(host, UNPOPUP, editor, true), false, 'unpopup');
+});
+
+test('Show Popup In The Note 不看选区：光标停在原处也可用', () => {
+	const host = createHost();
+	registerCommands(host);
+	// 与上一条同一个「无选区」编辑器：两个转换命令灰掉，这条必须仍然可用
+	const editor = createEditor('```js\na\n```', { from: { line: 1, ch: 0 }, to: { line: 1, ch: 0 } });
+	assert.equal(runCommand(host, SHOW, editor, true), true, 'checking 阶段恒为 true');
+});
+
+// —— Show Popup In The Note ——
+//
+// 这条命令没有写回路径：它扫当前笔记文本、开弹窗。断言的是「弹窗开了没有、开在哪一条」与
+// 「有没有提示」。候选集与「点放大图标」那条路径同源（同一个 `buildPopupSession`），
+// 所以这里用代码块做样本 —— 三类原生区块是纯字符串处理，不需要 DOM 环境。
+
+/** 断言「开了 1 个弹窗且停在第一条」；`index` 是 TS `private`，运行期就是普通属性。 */
+function expectOpenedFirst(host, editor) {
+	const before = editor.getValue();
+	runCommand(host, SHOW, editor);
+	assert.equal(modals.length, 1, '应该开一个弹窗');
+	assert.equal(modals[0].index, 0, '起点必须是第一条');
+	assert.deepEqual([...notices], [], '正常路径不该有提示');
+	assert.equal(editor.getValue(), before, '这条命令只读，不该改动一个字节');
+	return modals[0];
+}
+
+test('笔记里没有可放大的区块时只提示、不弹空窗', () => {
+	const host = createHost();
+	registerCommands(host);
+	const editor = createEditor('普通段落\nafter');
+	runCommand(host, SHOW, editor);
+	assert.deepEqual([...notices], [t('No popup in the current note.')], '提示文案应为 t(...)');
+	assert.equal(modals.length, 0, '没有可打开的块时不能弹窗');
+});
+
+test('空笔记同样只提示', () => {
+	const host = createHost();
+	registerCommands(host);
+	runCommand(host, SHOW, createEditor(''));
+	assert.deepEqual([...notices], [t('No popup in the current note.')]);
+	assert.equal(modals.length, 0);
+});
+
+test('笔记里有一条代码块时打开弹窗（不提示）', () => {
+	const host = createHost();
+	registerCommands(host);
+	const modal = expectOpenedFirst(host, createEditor('```js\nconst a = 1;\n```'));
+	assert.equal(modal.source.size, 1, '总数来自本笔记的可放大区块数');
+	assert.equal(modal.source.read(0).plain, 'const a = 1;', '开的是第一条的内容');
+});
+
+test('有多条时起点固定为文档顺序里的第一条', () => {
+	const host = createHost();
+	registerCommands(host);
+	const modal = expectOpenedFirst(host, createEditor('```js\nfirst\n```\n\n```js\nsecond\n```'));
+	assert.equal(modal.source.size, 2);
+	assert.equal(modal.source.read(0).plain, 'first');
+	assert.equal(modal.source.read(1).plain, 'second');
+});
+
+test('关掉的区块类别不算 Popup：只剩代码块时提示「没有」', () => {
+	const host = createHost({ blockKinds: { code: false } });
+	registerCommands(host);
+	runCommand(host, SHOW, createEditor('```js\na\n```'));
+	assert.deepEqual([...notices], [t('No popup in the current note.')], '候选集与类别开关同源');
+	assert.equal(modals.length, 0);
+});
+
+test('三条命令互不干扰：Show 不改笔记，转换命令照旧可用', () => {
+	const host = createHost();
+	registerCommands(host);
+	const note = 'hello **world**\n\n```js\na\n```';
+	const editor = createEditor(note);
+	runCommand(host, SHOW, editor);
+	assert.equal(editor.getValue(), note, 'Show 不该改动笔记');
+	assert.equal(modals.length, 1, '代码块算一条候选');
+	runCommand(host, POPUP, createEditor('hello'));
+	assert.deepEqual([...notices], [], '转换命令不受影响');
 });
 
 // —— Popup 正常路径 ——

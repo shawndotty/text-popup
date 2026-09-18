@@ -17,7 +17,7 @@ import moment from 'moment';
 
 export { moment };
 
-/** settings.ts / modal.ts / scanner.ts 用到的空壳；测试不 new，只需可被继承与赋值。 */
+/** settings.ts / scanner.ts 用到的空壳；除下方的 `Modal` 外，测试只赋值、不 new。 */
 export class App {}
 
 export class Component {
@@ -32,7 +32,18 @@ export class MarkdownView {}
 
 export class Plugin {}
 
-export class Modal {}
+/**
+ * `Show Popup In The Note` 命令会 `new TextPopupModal(...).open()`，所以这个壳要能被 new。
+ * `open()` 按顺序记进模块级 `modals`（与 `notices` 同一手法）：**不模拟 Obsidian 行为**，
+ * 只让用例能断言「弹窗开没开、开在哪一条」。`onOpen` 不触发，因此不会碰任何 DOM。
+ */
+export const modals = [];
+
+export class Modal {
+	open() {
+		modals.push(this);
+	}
+}
 
 export class PluginSettingTab {}
 

@@ -44,6 +44,7 @@ export default {
 	// —— 命令名 · 右键菜单项 ——
 	'Popup selected text': 'Popup selected text',
 	'Unpopup selected text': 'Unpopup selected text',
+	'Show Popup In The Note': 'Show Popup In The Note',
 
 	// —— Notice 提示 ——
 	'Please use a single cursor.': 'Please use a single cursor.',
@@ -62,6 +63,7 @@ export default {
 		'The selection spans multiple popup blocks; only one can be restored at a time.',
 	'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.':
 		'No restorable wrapper tag found; only block-level tags from "Supported tags" are supported.',
+	'No popup in the current note.': 'No popup in the current note.',
 
 	// —— 弹窗控制条与标题兜底 ——
 	'Font size': 'Font size',
