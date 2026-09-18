@@ -79,6 +79,10 @@ npm run build
 
 ## Testing
 
+- Automated tests: `npm test` uses Node's built-in `node:test` + `jiti` to import the TypeScript modules directly (no build step). `tests/stubs/obsidian.mjs` replaces the `obsidian` module for the tests that need it. CI runs the same tests on Node 20/22/24 — run `npm test` before finishing any change.
+- `tests/locale-key-alignment.test.mjs` checks every locale dictionary against `en` — run it after any i18n change.
+- When adding or changing logic in `src/`, add or update the matching `tests/*.test.mjs`.
+- Not covered by tests, on purpose: the DOM and CodeMirror paths (`scanner.ts`, `modal.ts`, `extractText`, `extractRichSource`). They need real layout — verify them in a real vault instead of with a fake DOM.
 - Manual install for testing: copy `main.js`, `manifest.json`, `styles.css` (if any) to:
     ```
     <Vault>/.obsidian/plugins/<plugin-id>/

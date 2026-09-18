@@ -25,3 +25,6 @@ jobs:
             - run: npm ci
             - run: npm run build --if-present
             - run: npm run lint
+            # `npm test` 用的是 Node 自带的 glob（tests/**/*.test.mjs），在 Node 20 上不可靠；
+            # CI 里改用 shell 展开。两种写法覆盖同一批文件（tests/ 是扁平结构）。
+            - run: node --test tests/*.test.mjs
