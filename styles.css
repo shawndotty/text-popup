@@ -136,6 +136,10 @@
 	min-width: min(640px, 100%);
 }
 
+.mod-text-popup .text-popup-text.is-rich .callout {
+	padding: 6px 12px;
+}
+
 /* 底部控制条：字号 / 缩放 / 恢复默认 */
 
 .mod-text-popup .text-popup-controls {
