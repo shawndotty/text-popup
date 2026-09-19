@@ -161,13 +161,20 @@
 }
 
 /* Mermaid：把图当矢量图整体缩放。
-   ① 容器占满弹窗宽度 —— 下面 calc(100% * scale) 里的 100% 才有意义；
-   ② 盖掉 mermaid 写在 svg 内联 style 上的 max-width —— 必须 !important，
-      内联样式压过样式表（旧规则 styles.css:172-175 就是这样失效的）；
-   ③ 宽度 = 弹窗宽度 × 缩放比，高度按 viewBox 比例自动，scale < 1 时居中。
-   .mermaid 必须保留 width:100%：它是 flex 项，若宽度塌成内容宽度，
-   内部 svg 的百分比宽度会进入循环引用、回退到 svg 固有尺寸（≈549px），
-   而非期望的整窗宽度（≈1353px）。 */
+   缩放基线是「一屏刚好装下」而不是「铺满弹窗宽度」：各图自然尺寸差 5 倍以上
+   （实测 viewBox 100×298 ~ 546×450），同一个「铺满宽」对状态图是 13.5 倍、对饼图只有
+   2.5 倍，打开必然有几张要滚 4~6 屏；而且没有任何档位能把图拉回自然尺寸
+   —— 原因与实测见 Plan-20260919-171610。
+   ① --tp-mermaid-w 由 modal.ts 的 fitMermaid() 写在 svg 上（= 该图 viewBox 宽 × fit，
+      fit = min(可用宽/视宽, 可用高/视高, MERMAID_MAX_FIT)）；这里的 fallback 100%
+      只是「JS 还没跑到」时的兜底，等价于旧行为（铺满宽），不会塌成 0。
+   ② 必须 !important：mermaid 把 max-width 写在 svg 内联 style 上，内联样式压过样式表
+      （旧规则 styles.css:172-175 就是这样失效的）。
+   ③ 宽度是绝对 px 之后 height: auto 才会按 viewBox 比例给出高度；
+      宽度是百分比时 max-height 会变形（见 Plan-20260919-164016 §4）。
+   ④ .mermaid 必须保留 width:100%：容器占满宽度既是下面 margin-inline: auto 能把窄图居中的前提，
+      也避免 flex 项宽度塌成内容宽度 —— 那样内部 svg 的百分比宽度会进入循环引用、
+      回退到 svg 固有尺寸（≈549px）而非期望的整窗宽度（≈1353px）。 */
 .mod-text-popup .text-popup-text.is-rich:has(.mermaid) {
 	width: 100%;
 	min-width: 100%;
@@ -181,7 +188,7 @@
 .mod-text-popup .text-popup-text.is-rich .mermaid > svg {
 	display: block; /* 父元素改成 block 后，svg 会退回行内；行内元素 margin:auto 不居中（实测 left 仍是 64 而不是 402） */
 	max-width: none !important;
-	width: calc(100% * var(--text-popup-mermaid-scale, 1));
+	width: calc(var(--tp-mermaid-w, 100%) * var(--text-popup-mermaid-scale, 1));
 	height: auto;
 	margin-inline: auto;
 }

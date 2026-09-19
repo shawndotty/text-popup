@@ -12,6 +12,20 @@ import {
 
 const DEFAULT_ZOOM = 1;
 
+/**
+ * mermaid 图「一屏装下」时允许的最大放大倍数：1 = 只缩不放，Infinity = 撑满一屏。
+ * 取 2 的理由（实测三档对照见 Plan-20260919-171610 §3.2）：1 会让甘特图比笔记里还小，
+ * Infinity 会把宽而扁的图放到 4 倍以上、文字夸张；2 让 6 张样本全部一屏装下且不超自然尺寸 2 倍。
+ */
+const MERMAID_MAX_FIT = 2;
+
+/**
+ * mermaid 缩放比的上下限（§3.5f）。理论区间是 0.375 ~ 18（字号 12~72、缩放 0.5~4），
+ * 18 倍在 fit 基线上毫无使用价值，夹到 4 倍（已是 4 屏）即可。
+ */
+const MERMAID_SCALE_MIN = 0.25;
+const MERMAID_SCALE_MAX = 4;
+
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
@@ -89,6 +103,10 @@ export class TextPopupModal extends Modal {
 	private renderToken = 0;
 	private fontSizeValueEl: HTMLElement | null = null;
 	private zoomValueEl: HTMLElement | null = null;
+	/** 盯着 mermaid 的 svg 被异步插进来（时序见 fitMermaid）；onClose 里断开。 */
+	private mermaidObserver: MutationObserver | null = null;
+	/** 弹窗铺满窗口，窗口尺寸变了 fit 就过期；存成字段才能在 onClose 里解绑。 */
+	private resizeHandler = (): void => this.fitMermaid();
 
 	constructor(
 		app: App,
@@ -126,6 +144,14 @@ export class TextPopupModal extends Modal {
 		// 内容短时居中显示，内容长时仍可从头滚动。
 		this.scrollEl = this.contentEl.createDiv({ cls: 'text-popup-content' });
 
+		// mermaid 的 svg 是异步插进来的（实测比正文容器晚约 5ms、在另一个 task 里，见 fitMermaid），
+		// 所以除了渲染后主动算一次，还要盯着新插入的 svg 补算。
+		this.mermaidObserver = new MutationObserver(() => this.fitMermaid());
+		// 只监听 childList：fitMermaid 改的是 svg 的 style（属性变更），不会自触发成死循环。
+		this.mermaidObserver.observe(this.scrollEl, { childList: true, subtree: true });
+		// 弹窗铺满窗口，窗口尺寸变了 fit 就过期
+		activeWindow.addEventListener('resize', this.resizeHandler);
+
 		this.buildControls(this.contentEl);
 		this.updateSize();
 
@@ -135,6 +161,10 @@ export class TextPopupModal extends Modal {
 	onClose(): void {
 		this.component.unload();
 		this.contentEl.empty();
+		// 观察器与窗口监听都属于「弹窗存续期间」的资源，关窗必须解绑，否则会跟着窗口一直留着
+		this.mermaidObserver?.disconnect();
+		this.mermaidObserver = null;
+		activeWindow.removeEventListener('resize', this.resizeHandler);
 		// 移除离屏宿主，不留游离节点
 		this.source.dispose?.();
 	}
@@ -227,7 +257,10 @@ export class TextPopupModal extends Modal {
 					return;
 				}
 				// 判据用「有文本 或 有子元素」，覆盖「只渲染出一张图片、没有文字」的情况。
-				if (textEl.textContent?.trim() || textEl.childElementCount > 0) return;
+				if (textEl.textContent?.trim() || textEl.childElementCount > 0) {
+					this.fitMermaid(); // 先主动算一次；svg 晚到的那些由 mermaidObserver 补
+					return;
+				}
 			} catch (error) {
 				console.error('[text-popup] 富文本渲染失败，已回退为纯文本', error);
 			}
@@ -237,6 +270,42 @@ export class TextPopupModal extends Modal {
 		}
 		textEl.addClass('is-plain');
 		textEl.setText(body.plain);
+	}
+
+	/**
+	 * 让每张 mermaid 图在 scale = 1 时「一屏刚好装下」：给 svg 写 `--tp-mermaid-w`（见 styles.css）。
+	 *
+	 * 为什么逐图算：各图 aspect 差得极远（实测 viewBox 100×298 ~ 546×450），共用一个全局缩放比
+	 * 必然让其中一批过大、另一批过小 —— 这正是 Plan-20260919-171610 要修的病根。
+	 * 为什么读 viewBox 而不是量 svg 当前尺寸：svg 上的 width 正是我们自己在控制，量它等于拿结果
+	 * 当输入；viewBox 才是图自己的坐标系，与弹窗宽度无关。
+	 * 为什么写 CSS 变量而不是直接写 width：缩放档位变化时只需改弹窗根节点的
+	 * --text-popup-mermaid-scale（updateSize 已经在做），不必重新遍历 DOM。
+	 *
+	 * 时序：svg 由 mermaid 异步插入，实测比正文容器晚约 5ms、在另一个 task 里
+	 * （`[["keydown",444419],["textEl",444419],["svg",444424]]`）—— 即 `await MarkdownRenderer.render()`
+	 * 返回与「svg 已在 DOM 里」没有保证的先后关系，只在渲染后同步量一次会偶发漏算
+	 * （漏算的那张退回 CSS fallback = 旧行为）。所以 renderBody 主动算一次 +
+	 * mermaidObserver 盯着新插入的 svg 补算；observer 回调是微任务、在 paint 之前跑，不会闪一帧。
+	 */
+	private fitMermaid(): void {
+		const style = activeWindow.getComputedStyle(this.scrollEl);
+		const availW =
+			this.scrollEl.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+		const availH =
+			this.scrollEl.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+		if (availW <= 0 || availH <= 0) return; // 弹窗还没布局出来（或窗口被压得极小）
+		this.scrollEl.querySelectorAll<SVGSVGElement>('.mermaid > svg').forEach((svg) => {
+			const box = svg.viewBox.baseVal;
+			if (!box.width || !box.height) return; // 没有 viewBox 的 svg：留给 CSS 的 fallback
+			// 图在 callout 里时容器比内容区窄，可用宽要按容器算。.mermaid 是 width:100% 的块级元素，
+			// 宽度由父级确定、不会因为 svg 变宽而回授，所以这样取是安全的；不在 callout 里时
+			// parentW 就等于内容区宽，Math.min 是恒等操作。
+			const parentW = svg.parentElement?.clientWidth ?? 0;
+			const width = parentW > 0 ? Math.min(availW, parentW) : availW;
+			const fit = Math.min(width / box.width, availH / box.height, MERMAID_MAX_FIT);
+			svg.style.setProperty('--tp-mermaid-w', `${(box.width * fit).toFixed(2)}px`);
+		});
 	}
 
 	private buildControls(parentEl: HTMLElement): void {
@@ -300,10 +369,17 @@ export class TextPopupModal extends Modal {
 	private updateSize(): void {
 		const effectiveSize = Math.round(this.fontSize * this.zoom);
 		this.modalEl.style.setProperty('--text-popup-font-size', `${effectiveSize}px`);
-		// mermaid 是矢量图：字号 / 缩放都换算成「整图缩放比」，1 = 铺满弹窗宽度
+		// mermaid 是矢量图：字号 / 缩放都换算成「整图缩放比」，乘在 fit 基线上（1 = 一屏装下）。
+		// 夹上下限：不夹时理论区间是 0.375 ~ 18，18 倍毫无使用价值（见 MERMAID_SCALE_MAX）。
 		this.modalEl.style.setProperty(
 			'--text-popup-mermaid-scale',
-			String(effectiveSize / this.settings.popupFontSize),
+			String(
+				clamp(
+					effectiveSize / this.settings.popupFontSize,
+					MERMAID_SCALE_MIN,
+					MERMAID_SCALE_MAX,
+				),
+			),
 		);
 		this.fontSizeValueEl?.setText(`${this.fontSize} px`);
 		this.zoomValueEl?.setText(`${Math.round(this.zoom * 100)}%`);
