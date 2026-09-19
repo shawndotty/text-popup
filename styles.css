@@ -180,6 +180,24 @@
 	min-width: 100%;
 }
 
+/* Mermaid 甘特图：把「暂存宽度」提前钉成整窗宽。
+   Obsidian 渲染 mermaid 时，先把图放在一个离屏 div 里画好，那个 div 的宽度 = `code.language-mermaid`
+   的父元素（<pre>）的 clientWidth。而甘特图没有自然宽度 —— mermaid 直接把「容器宽」写进 viewBox，
+   之后怎么放大都只是把这张挤在一起的图等比放大（原因与实测见 Plan-20260919-173545）。
+   弹窗里这个 <pre> 曾经是 flex 项、只有源码最长行那么宽（实测 290px），甘特的 15 个日期刻度因此
+   只剩 10px 间距、而标签有 57px 宽 —— 全挤成一团。
+   命中判据用 code.language-mermaid：这是 Obsidian 自己在渲染时写在 <code> 上的类
+   （实测 class 为 "language-mermaid is-loaded"），而不是「靠 :has(pre) 猜阶段」。
+   两条都要：只钉 <pre> 时它相对的仍是 640 宽的容器（实测 viewBox 只到 640，仍重叠）。 */
+.mod-text-popup .text-popup-text.is-rich:has(code.language-mermaid) {
+	width: 100%;
+	min-width: 100%;
+}
+
+.mod-text-popup .text-popup-text.is-rich pre:has(> code.language-mermaid) {
+	width: 100%;
+}
+
 .mod-text-popup .text-popup-text.is-rich .mermaid {
 	display: block; /* 原来是 flex + justify-content:center；块级 + svg 的 auto 外边距更可控 */
 	width: 100%;
