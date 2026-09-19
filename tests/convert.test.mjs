@@ -18,7 +18,7 @@ import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const { findOuterPopupElement, hasBlockBody, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } =
-	await jiti.import('../src/convert.ts');
+	await jiti.import('../src/convert');
 
 /** 断言时统一带上输入，失败信息里能直接看到是哪条样例。 */
 function eq(actual, expected, input) {
