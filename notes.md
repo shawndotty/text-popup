@@ -1,1 +1,1 @@
-- optimization for mermaid popup view
+- add support for images popup
