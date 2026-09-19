@@ -77,7 +77,7 @@ const zhTW: Partial<typeof en> = {
 	'Magnified view': '放大顯示',
 
 	// —— 放大圖示的 aria-label ——
-	'Magnify text': '放大顯示',
+	'Magnify': '放大顯示',
 };
 
 export default zhTW;

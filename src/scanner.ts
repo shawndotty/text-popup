@@ -496,9 +496,9 @@ function createActionEl(
 	const actionEl = inline ? parent.createSpan({ cls }) : parent.createDiv({ cls });
 	actionEl.setAttribute('role', 'button');
 	actionEl.setAttribute('tabindex', '0');
-	// 惰性取文案：写成模块级 `const ACTION_LABEL = t('Magnify text')` 会把语言冻结在加载时刻，
+	// 惰性取文案：写成模块级 `const ACTION_LABEL = t('Magnify')` 会把语言冻结在加载时刻，
 	// 改语言后已注入的按钮不会跟着变（Plan-20260918-104304 的风险 K3）。
-	actionEl.setAttribute('aria-label', t('Magnify text'));
+	actionEl.setAttribute('aria-label', t('Magnify'));
 	setIcon(actionEl, 'maximize-2');
 
 	const open = (evt?: Event): void => {

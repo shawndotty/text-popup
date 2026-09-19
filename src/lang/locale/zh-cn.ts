@@ -76,7 +76,7 @@ const zhCN: Partial<typeof en> = {
 	'Magnified view': '放大显示',
 
 	// —— 放大图标的 aria-label ——
-	'Magnify text': '放大显示',
+	'Magnify': '放大显示',
 };
 
 export default zhCN;
