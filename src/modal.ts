@@ -300,6 +300,11 @@ export class TextPopupModal extends Modal {
 	private updateSize(): void {
 		const effectiveSize = Math.round(this.fontSize * this.zoom);
 		this.modalEl.style.setProperty('--text-popup-font-size', `${effectiveSize}px`);
+		// mermaid 是矢量图：字号 / 缩放都换算成「整图缩放比」，1 = 铺满弹窗宽度
+		this.modalEl.style.setProperty(
+			'--text-popup-mermaid-scale',
+			String(effectiveSize / this.settings.popupFontSize),
+		);
 		this.fontSizeValueEl?.setText(`${this.fontSize} px`);
 		this.zoomValueEl?.setText(`${Math.round(this.zoom * 100)}%`);
 	}
