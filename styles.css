@@ -78,7 +78,9 @@
 	padding: var(--size-4-3) var(--size-4-4);
 	/* 右侧留出关闭按钮的位置，笔记名过长时不会钻到按钮下面 */
 	padding-inline-end: var(--size-4-12);
-	border-bottom: 1px solid var(--background-modifier-border);
+	border-bottom: 0px solid var(--background-modifier-border);
+	position: absolute;
+	width: 100%;
 }
 
 .mod-text-popup .modal-title {
@@ -103,6 +105,10 @@
 	min-height: 0;
 	overflow: auto;
 	padding: var(--size-4-16);
+}
+
+.mod-text-popup .text-popup-content:has(img) {
+	padding: 0;
 }
 
 /* 内容容器：两种模式共用字号 / 颜色 / 居中 */
@@ -264,6 +270,13 @@
 	gap: var(--size-4-3);
 	padding: var(--size-4-2) var(--size-4-4);
 	border-top: 1px solid var(--background-modifier-border);
+	position: absolute;
+	bottom: 0;
+	width: 100%;
+}
+
+.mod-text-popup .modal-content:has(img) .text-popup-controls {
+	display: none;
 }
 
 .mod-text-popup .text-popup-control-group {
