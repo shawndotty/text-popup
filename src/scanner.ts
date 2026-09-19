@@ -5,6 +5,7 @@ import type { BlockKind, TextBlockRegion } from './blocks';
 import {
 	extractCalloutBody,
 	extractFencedBody,
+	extractImageBody,
 	extractMathBody,
 	extractRichSource,
 	extractText,
@@ -28,6 +29,7 @@ import { findSupportedElement } from './tags';
  *   - Callout        → `createDiv("cm-embed-block cm-callout")`（`L3` 传入的 clazz）
  *   - 数学块         → `"math"` + `toggleClass("math-block" / "cm-embed-block")`
  * 表格（`.cm-table-widget`）等核心区块不带上面任何一个类名，由 `classifyBlock` 返回 null 过滤掉。
+ * 图片嵌入**不在**这条选择器里（它的容器是 `.image-embed`），单独走 `IMAGE_SELECTOR`。
  *
  * 注：` ```base ` 块也带 `.cm-preview-code-block`（核心按代码块建容器，CSS 给它的 `.embed-actions`
  * 设了常显），因此按代码块处理 —— 与「有控制图标的区块才加放大图标」这条判据一致。
@@ -53,6 +55,21 @@ const FLAIR_ACTION_CLASS = 'text-popup-flair-action';
  * 节点会被当成一次 DOM 变更、把整行标脏重渲染 —— 那会把按钮反复冲掉（注入 → 重渲染 → 再注入）。
  */
 const CODE_FLAIR_SELECTOR = '.code-block-flair';
+
+/**
+ * 第三处注入点：图片嵌入。
+ *
+ * 容器**不是** `.cm-embed-block`（这正是最初的 `BLOCK_SELECTOR` 完全扫不到图片的原因），
+ * 而是核心给图片 widget 自己建的 `div.image-embed`（Live Preview 里的独立行 / 引用行 / 列表行
+ * 都成立）。它内部的 `.embed-actions` 与 widget 类区块是同一套（`addActions` → `addAction`
+ * → `this.actionsEl ||= e.createDiv("embed-actions")`），所以图标插首位即可白拿核心的胶囊皮肤、
+ * 悬停显隐与 RTL 镜像。
+ *
+ * 加 `.cm-content` 前缀是为了排除阅读视图与嵌入笔记里的 `.image-embed`（后者由下面的守卫再兜一次）。
+ * 据真机实测，Callout 内 / 行内 HTML 里的图片是 `span.image-embed` 且**没有** `.embed-actions`，
+ * 表格单元格里更是连 `.image-embed` 都没有 —— 它们都不参与（否则就是「能翻到、但永远没有图标」）。
+ */
+const IMAGE_SELECTOR = '.cm-content .image-embed';
 /** 离屏测量容器的类名（弹窗打开期间存在，关闭时移除）。 */
 const MEASURE_CLASS = 'text-popup-measure';
 const SCAN_DEBOUNCE_MS = 150;
@@ -98,7 +115,7 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 	}
 	if (Platform.isMobile) return;
 
-	// 一次遍历 + 类名分类：四类区块共用 `.cm-embed-block`，不必为每类各跑一次全文档查询。
+	// 一次遍历 + 类名分类：走 `.cm-embed-block` 的四类区块共用它，不必为每类各跑一次全文档查询。
 	activeDocument.querySelectorAll<HTMLElement>(BLOCK_SELECTOR).forEach((blockEl) => {
 		const kind = classifyBlock(blockEl);
 		if (!kind) return;
@@ -112,9 +129,18 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 		if (isKindEnabled(host.settings, 'code')) injectFlairAction(flairEl, host);
 		else removeFlairAction(flairEl);
 	});
+
+	// 第三处注入点：图片嵌入（容器是 `.image-embed`，不带 `.cm-embed-block`）。
+	activeDocument.querySelectorAll<HTMLElement>(IMAGE_SELECTOR).forEach((imageEl) => {
+		if (isKindEnabled(host.settings, 'image')) injectImageAction(imageEl, host);
+		else removeAction(imageEl);
+	});
 }
 
-/** 容器 → 类别；不属于本插件支持的四类时返回 null（表格等核心区块不参与）。 */
+/**
+ * 容器 → 类别；不属于这条路支持的四类时返回 null（表格等核心区块不参与）。
+ * 图片嵌入不经过这里（容器是 `.image-embed`，见 `IMAGE_SELECTOR`）。
+ */
 function classifyBlock(blockEl: HTMLElement): BlockKind | null {
 	if (blockEl.classList.contains('cm-html-embed')) return 'html';
 	if (blockEl.classList.contains('cm-preview-code-block')) return 'code';
@@ -201,9 +227,10 @@ type EditorViewLike = { posAtDOM(node: Node, offset?: number): number };
  * 再落到行号区间上 —— 精确，且不受核心「按内容相同复用 widget」的影响。
  * 兜底：按内容相等匹配；再不行回 0（宁可从头开始，也不要弹空白）。
  *
- * 代码块 chip 里的按钮不在任何 `.cm-embed-block` 里，退回它所在的行（`.cm-line`）去定位：
- * chip 挂在开围栏那一行的末尾，因此这一行就是区间的起始行。这类锚点**只认精确命中**，
- * 对不上就返回 -1（弹窗不会开），避免「引用块里的围栏没有对应区间 → 翻出别的块」。
+ * 代码块 chip 与图片嵌入的按钮都不在任何 `.cm-embed-block` 里，退回它所在的行（`.cm-line`）去定位：
+ * chip 挂在开围栏那一行的末尾，图片的 `div.image-embed` 就是所在行的直接子节点，两者的行号都等于
+ * 区间的起始行（图片区间是单行的）。这类锚点**只认精确命中**，对不上就返回 -1（弹窗不会开），
+ * 避免「引用块里的围栏没有对应区间 → 翻出别的块」；对图片同样是想要的（宁可不开，也不翻出别的块）。
  */
 function locateStartIndex(
 	editor: Editor,
@@ -239,7 +266,7 @@ function locateStartIndex(
 /**
  * 组装一次弹窗会话的导航来源。
  *
- * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，四类区间按类别开关过滤），不是 DOM：
+ * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，五类区间按类别开关过滤），不是 DOM：
  * Live Preview 只渲染视口附近的块，以 DOM 为准会让「总数」随滚动 / 光标 / 分屏变化。
  * 打开时算一次、提取一次，弹窗打开期间不再重采 —— 标题的总数与正文永远同源。
  */
@@ -274,7 +301,7 @@ export function createTextPopupSource(
  *
  * 有意**不看** `settings.enabled`：那项的字面含义与设置页描述都是「显示放大图标」，
  * 而命令是用户显式触发的，关掉图标后仍应能用（也能在移动端用 —— 那里根本不注入图标）。
- * 三类区块各自的开关照旧生效：它们已经参与候选集过滤，定义「什么算一个 Popup」。
+ * 各类区块各自的开关照旧生效：它们已经参与候选集过滤，定义「什么算一个 Popup」。
  */
 export function openFirstTextPopup(host: PopupSessionHost, editor: Editor): boolean {
 	const file = host.app.workspace.getActiveFile();
@@ -337,7 +364,7 @@ function buildPopupSession(
  * 一个区间 → 一个候选；内容为空（点了会弹空白屏）时返回 null。
  *
  * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素。
- * 另外三类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
+ * 另外四类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
  * 只有真的遇到 html 区间才会建出那个游离节点。
  */
 function createCandidate(
@@ -374,7 +401,7 @@ function createCandidate(
 	};
 }
 
-/** 三类原生区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
+/** 四类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
 function readTextBody(region: TextBlockRegion): string {
 	switch (region.kind) {
 		case 'code':
@@ -383,6 +410,8 @@ function readTextBody(region: TextBlockRegion): string {
 			return extractCalloutBody(region.raw);
 		case 'math':
 			return extractMathBody(region.raw);
+		case 'image':
+			return extractImageBody(region.raw);
 		default:
 			return '';
 	}
@@ -412,6 +441,25 @@ function injectAction(blockEl: HTMLElement, host: TextPopupHost, kind: BlockKind
 }
 
 /**
+ * 往图片嵌入的 `.embed-actions` 里注入放大图标，插在首位 = 原生「放大」（lucide-zoom-in）图标的左侧。
+ *
+ * 与 `injectAction` 的差别只有锚点与两条守卫：
+ * - 没有 `.embed-actions` 的图片（Callout 内 / 行内 HTML 里的 `span.image-embed`）天然跳过 ——
+ *   这类图片在扫描器里也不产候选，两边一致；
+ * - 嵌入笔记（`![[某笔记]]`）里的图片不注入：候选集来自**外层笔记的文本**，在那里点开也定位不到。
+ *
+ * 不覆盖原生图标（需求明确要保留 Obsidian 自己的查看器）：两个按钮是兄弟节点，各自的 click
+ * 监听互不干扰；`interactive-child` 让核心的点击接管跳过我们这一个。
+ */
+function injectImageAction(imageEl: HTMLElement, host: TextPopupHost): void {
+	const actionsEl = imageEl.querySelector<HTMLElement>(ACTIONS_SELECTOR);
+	if (!actionsEl) return;
+	if (imageEl.closest('.markdown-embed')) return;
+	if (actionsEl.querySelector<HTMLElement>(`:scope > .${ACTION_CLASS}`)) return;
+	actionsEl.insertBefore(createActionEl(actionsEl, host, 'embed-action'), actionsEl.firstChild);
+}
+
+/**
  * 往普通代码块右上角的 chip（`.code-block-flair`）里注入放大图标。
  *
  * 与 `.embed-actions` 版本的区别只有锚点：chip 里没有图标槽位，所以按钮是 chip 的**子节点**
@@ -432,7 +480,7 @@ function injectFlairAction(flairEl: HTMLElement, host: TextPopupHost): void {
 }
 
 /**
- * 建按钮并接好交互 —— 两处锚点共用。
+ * 建按钮并接好交互 —— 三处锚点共用。
  *
  * `inline` 用 span：代码块 chip 是行内的 `display: inline-block`，div 会在里面另起一行。
  * interactive-child 是核心约定的「交互子元素」标记：核心的点击接管与双击进块都会跳过它。

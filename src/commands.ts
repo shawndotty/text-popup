@@ -116,8 +116,10 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 	}
 
 	// 在围栏里塞标签只会变成字面文本；Callout 每行还要补 `>` 前缀。一律拒绝，且一个字节都不改。
-	const clash = scanTextBlocks(editor.getValue()).find((region) =>
-		overlaps(region, range.from.line, range.to.line),
+	// 图片**不是**「容器」类：选区里有一行 `![x](p.png)` 照常转换（这一行以前压根不在候选里，
+	// 不把它排除就是本次改动引入的回归）。
+	const clash = scanTextBlocks(editor.getValue()).find(
+		(region) => region.kind !== 'image' && overlaps(region, range.from.line, range.to.line),
 	);
 	if (clash && clash.kind !== 'html') {
 		new Notice(t('The selection is inside a code block, callout, or math block.'));

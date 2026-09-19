@@ -1,5 +1,5 @@
 /**
- * `blocks.ts` 的行为用例 —— 四类区块的扫描与标签判定。
+ * `blocks.ts` 的行为用例 —— 五类区块的扫描与标签判定。
  *
  * 这是「能翻到几条」的事实来源：扫描结果直接决定 Live Preview 里哪些块会拿到放大图标。
  * 最需要守住的不变量是**区间不重叠、外层优先**：Callout 里嵌的代码块在核心里不生成独立的
@@ -136,6 +136,100 @@ test('Callout 到第一个非引用行为止，折叠标记不影响识别', () 
 
 test('没有 [!TYPE] 的普通引用不算 Callout', () => {
 	assert.deepEqual(outline('> 普通引用\n> 第二行'), []);
+});
+
+// —— 图片（第 5 类）——
+//
+// 正例的六种写法都在真机探针里量过：独立行 / 引用行 / 列表行都会生成带 `.embed-actions` 的
+// `.image-embed`（因此有原生放大图标、也必须有我们的一条候选）。反例都是**实测没有图标**的
+// 写法，放进候选就会变成「能翻到、但永远没有图标」的幽灵条目。
+
+test('六种图片写法各产出一条单行区间，raw 是命中的语法片段', () => {
+	const cases = [
+		'![alt](p.png)',
+		'![[p.png]]',
+		'![[p.png|100]]',
+		'![alt|120](p.png)',
+		'> ![alt](p.png)',
+		'- ![alt](p.png)',
+	];
+	for (const line of cases) {
+		const regions = scanTextBlocks(line);
+		assert.deepEqual(outline(line), ['image:0-0'], `区间：${line}`);
+		// 引用行 / 列表行的 `> ` `- ` 前缀不能进 raw：整行喂给 MarkdownRenderer 会多一层壳
+		assert.equal(regions[0]?.raw, line.replace(/^ *[-*>] ?/, ''), `raw：${line}`);
+	}
+});
+
+test('图片的 target 解析：外链 / 角括号 / 标题 / #? 参数', () => {
+	assert.deepEqual(outline('![x](https://example.com/a.png)'), ['image:0-0'], '外链');
+	assert.deepEqual(outline('![x](p.png "标题")'), ['image:0-0'], '标题在空白之后');
+	assert.deepEqual(outline('![x](p.png#anchor)'), ['image:0-0'], '# 参数不影响');
+	assert.deepEqual(outline('![x](https://example.com/page)'), ['image:0-0'], '外链不看扩展名');
+	assert.deepEqual(outline('![x](https://youtube.com/watch?v=1)'), ['image:0-0'], '外链带 ? 参数');
+});
+
+test('正文里夹一张图仍算候选（真机实测它照样有 .embed-actions）', () => {
+	assert.deepEqual(outline('文字 ![x](p.png) 文字'), ['image:0-0']);
+});
+
+test('角括号 target 不被行内 HTML 守卫误伤（真机实测核心照建 div.image-embed）', () => {
+	assert.deepEqual(outline('![x](<my image.png>)'), ['image:0-0']);
+});
+
+test('非图片的嵌入不算图片区间（扩展名不在图片表里）', () => {
+	assert.deepEqual(outline('![[某笔记]]'), [], '无扩展名');
+	assert.deepEqual(outline('![[x.pdf]]'), [], 'pdf');
+	assert.deepEqual(outline('![[x.mp4]]'), [], '视频');
+	assert.deepEqual(outline('![x](某笔记)'), [], '路径形态无扩展名');
+});
+
+test('实测没有 .image-embed 的四种写法不产图片区间', () => {
+	assert.deepEqual(outline('    ![x](p.png)'), [], '4 空格缩进 = 缩进代码块');
+	assert.deepEqual(outline('| ![x](p.png) | y |'), [], '表格单元格');
+	assert.deepEqual(outline('前 <span>![x](p.png)</span> 后'), [], '行内 HTML widget');
+	assert.deepEqual(outline('- ![x](p.png)\n  - ![y](q.png)'), ['image:0-0', 'image:1-1'], '列表行仍算');
+});
+
+test('Callout / 围栏 / HTML 块体内的图片被外层吞掉，总数不变', () => {
+	assert.deepEqual(
+		outline('> [!note]\n> ![x](p.png)'),
+		outline('> [!note]\n> body'),
+		'Callout 内的图片不另算一条',
+	);
+	assert.deepEqual(outline('```\n![x](p.png)\n```'), ['code:0-2'], '围栏内');
+	assert.deepEqual(outline('<div>\n![x](p.png)\n</div>'), ['html:0-2'], 'HTML 块内');
+});
+
+test('图片与其它四类混排时不重叠、按文档顺序', () => {
+	const regions = scanTextBlocks(
+		[
+			'![[cover.png]]', // 0 图片
+			'',
+			'```js', // 2-4 代码块
+			'code',
+			'```',
+			'',
+			'> [!note]', // 6-7 Callout（体内的图片被吞掉）
+			'> ![inner.png](inner.png)',
+			'',
+			'$$a+b$$', // 9 数学块
+			'',
+			'<div>', // 11-13 HTML 块
+			'![in-html.png](x.png)',
+			'</div>',
+		].join('\n'),
+	);
+	assert.deepEqual(
+		regions.map((region) => `${region.kind}:${region.startLine}-${region.endLine}`),
+		['image:0-0', 'code:2-4', 'callout:6-7', 'math:9-9', 'html:11-13'],
+	);
+	for (let index = 1; index < regions.length; index++) {
+		assert.ok(
+			(regions[index - 1]?.endLine ?? -1) < (regions[index]?.startLine ?? -1),
+			`第 ${index} 个区间与前一个重叠`,
+		);
+	}
 });
 
 // —— 不重叠（关键不变量）——

@@ -1,9 +1,14 @@
 /**
  * 按笔记文本找出「可放大的区块」区间 —— 候选集的事实来源。
  *
- * 四类区块（块级原始 HTML / 围栏代码块 / Callout / `$$` 数学块）在 Live Preview 里
+ * 前四类区块（块级原始 HTML / 围栏代码块 / Callout / `$$` 数学块）在 Live Preview 里
  * 都是核心的 CM6 widget：容器都带 `.cm-embed-block`，都在容器内建 `.embed-actions`
  * 放控制图标。所以候选集可以共用一套扫描器，只在类别上分流。
+ *
+ * 第 5 类 `image` 是唯一**不**走 `.cm-embed-block` 的：核心给图片 widget 自己建的容器是
+ * `div.image-embed`（`addActions` 由编辑器 widget 的 `initDOM` 调用，在容器内建同一套
+ * `.embed-actions`）。所以它照样有原生「放大」图标、照样算一条候选，只是注入锚点不同
+ * （见 scanner.ts 的 `IMAGE_SELECTOR`）。
  *
  * 为什么不用 DOM：Live Preview 只把视口附近的行渲染成 DOM，滚出视口的块连按钮都没有，
  * 于是「能翻到几条」会随滚动变化。数量必须是笔记的属性，不能是屏幕的属性。
@@ -34,15 +39,19 @@ const INLINE_TAGS = new Set(
 /** 核心对这几类标签不建 widget（`obsidian.asar` 里的排除表），扫描同样跳过。 */
 const SKIPPED_TAGS = new Set(['script', 'style', 'link', 'meta', 'object', 'embed', 'webview']);
 
-/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余三类是 Obsidian 原生区块。 */
-export type BlockKind = 'html' | 'code' | 'callout' | 'math';
+/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余四类是 Obsidian 原生区块。 */
+export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image';
 
 /** 一个可放大区间；行号 0 起，与 Editor 的行号一致。 */
 export interface TextBlockRegion {
 	kind: BlockKind;
 	startLine: number;
 	endLine: number;
-	/** 该区间的原始文本（含围栏 / `> ` 前缀 / `$$`），与核心 widget 的输入一致。 */
+	/**
+	 * 该区间的原始文本，与核心 widget 的输入一致：前四类含围栏 / `> ` 前缀 / `$$`；
+	 * `image` 类是**命中的那段图片语法**（不是整行 —— 引用行 / 列表行的 `> ` / `- ` 前缀
+	 * 喂给 MarkdownRenderer 会多渲染出一层引用块 / 列表项）。
+	 */
 	raw: string;
 }
 
@@ -51,6 +60,8 @@ interface BlockMatch {
 	kind: BlockKind;
 	endLine: number;
 	include: boolean;
+	/** 覆盖区间原文时用（目前只有 `image` 类：存命中的语法片段而不是整行）。 */
+	raw?: string;
 }
 
 /**
@@ -151,16 +162,89 @@ function matchMathBlock(lines: readonly string[], start: number): BlockMatch | n
 	return { kind: 'math', endLine: end, include: true };
 }
 
-/** 同一行的类别优先级：`$$`、围栏、`> [!`、`<tag>` 互斥，写死顺序只为让行为可复现。 */
+/** Live Preview 里会被核心建成「图片嵌入」的扩展名（原样取自 `obsidian.asar` 的 `app.js`，勿手改）。 */
+const IMAGE_EXTENSIONS = new Set(['bmp', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif']);
+
+/** `![[…]]` / `![[…|100]]`（不含换行）。导出给 extract.ts 复用，避免两处各写一份。 */
+export const WIKI_EMBED = /!\[\[([^\]\n]+)\]\]/;
+
+/** `![alt](target)` / `![alt|120](target "title")`；第一个捕获组是圆括号里的**全部参数**。 */
+export const MD_IMAGE = /!\[[^\]\n]*\]\(([^)\n]+)\)/;
+
+/** 行内 HTML 标签：命中时这张图在行内 HTML widget 里（没有 `.embed-actions`），不做候选。 */
+const HTML_TAG = /<\/?[a-zA-Z][^>\n]*>/;
+
+/** wiki 形态：target 的扩展名必须在图片表里（`![[某笔记]]` / `![[x.pdf]]` 都不是图片嵌入）。 */
+function wikiImageTarget(inner: string): string | null {
+	const target = (inner.split('|')[0] ?? '').split('#')[0]?.trim() ?? '';
+	return hasImageExtension(target) ? target : null;
+}
+
+/**
+ * `![…](…)` 圆括号内容的「路径形态」解析：
+ * 先取出 target（`<…>` 形态允许含空格；其余形态在第一个空白处截断，空格在 URL 里必须转义），
+ * 再去掉 `#` / `?` 之后的参数，最后按扩展名 / 外链判据决定算不算图片。
+ */
+function pathImageTarget(inner: string): string | null {
+	const trimmed = inner.trim();
+	const angle = /^<([^>]*)>/.exec(trimmed);
+	const target = angle ? (angle[1] ?? '') : (/^\S+/.exec(trimmed)?.[0] ?? '');
+	const clean = target.split(/[#?]/)[0]?.trim() ?? '';
+	// 外链（含 `://`）核心一律建成 `<img>`，无法用扩展名判断
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(clean)) return clean;
+	return hasImageExtension(clean) ? clean : null;
+}
+
+function hasImageExtension(target: string): boolean {
+	const dot = target.lastIndexOf('.');
+	return dot > 0 && IMAGE_EXTENSIONS.has(target.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * 图片：单行区间。
+ *
+ * 三条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
+ * 但永远没有图标」的幽灵条目）：4 空格缩进会被当成缩进代码块；表格由 `.cm-table-widget`
+ * 自己画、单元格里根本没有 `.image-embed`；行内 HTML widget 里的图片是 `span` 且没有
+ * `.embed-actions`。
+ *
+ * 行内 HTML 那条要在**取出图片语法之后**再判：`![x](<带空格.png>)` 的角括号是 CommonMark
+ * 允许的 target 写法，核心照样给它在 `.cm-line` 里建 `div.image-embed` + `.embed-actions`
+ * （真机实测），按原行判会被自己的角括号误伤 —— 那样按钮被注入、候选却缺失，点了没反应。
+ *
+ * 排在 `MATCHERS` 最后：Callout / 围栏 / `$$` / HTML 块会先吃掉整段，所以 Callout 体内的图片
+ * 不会另算一条（由外层 Callout 覆盖）。
+ */
+function matchImageBlock(lines: readonly string[], start: number): BlockMatch | null {
+	const line = lines[start] ?? '';
+	if (/^ {4,}/.test(line)) return null;
+	if (line.trimStart().startsWith('|')) return null;
+
+	const wiki = WIKI_EMBED.exec(line);
+	const md = wiki ? null : MD_IMAGE.exec(line);
+	const target = wiki ? wikiImageTarget(wiki[1] ?? '') : md ? pathImageTarget(md[1] ?? '') : null;
+	const hit = wiki ?? md;
+	if (!target || !hit) return null;
+
+	// 命中片段之外的文字里若还有标签，说明这张图在行内 HTML widget 内（没有 `.embed-actions`）
+	const rest = line.slice(0, hit.index) + line.slice(hit.index + hit[0].length);
+	if (HTML_TAG.test(rest)) return null;
+
+	// raw 只存命中的那段语法：整行喂给 MarkdownRenderer 会多出一层引用块 / 列表项
+	return { kind: 'image', endLine: start, include: true, raw: hit[0] };
+}
+
+/** 同一行的类别优先级：`$$`、围栏、`> [!`、`<tag>` 互斥；图片排在最后（外层优先）。 */
 const MATCHERS: ReadonlyArray<(lines: readonly string[], start: number) => BlockMatch | null> = [
 	matchMathBlock,
 	matchFencedBlock,
 	matchCallout,
 	matchHtmlBlock,
+	matchImageBlock,
 ];
 
 /**
- * 单趟扫描全文，按文档顺序返回四类区间。
+ * 单趟扫描全文，按文档顺序返回五类区间。
  *
  * 命中任一起始判据就吃下整段区间，然后从区间末尾继续 —— 因此区间**天然不重叠、外层优先**。
  * 这一条是必需的，不是优化：Callout 里嵌的代码块在 Live Preview 里不会生成独立的
@@ -183,7 +267,7 @@ export function scanTextBlocks(text: string): TextBlockRegion[] {
 				kind: match.kind,
 				startLine: start,
 				endLine: match.endLine,
-				raw: lines.slice(start, match.endLine + 1).join('\n'),
+				raw: match.raw ?? lines.slice(start, match.endLine + 1).join('\n'),
 			});
 		}
 		start = match.endLine;

@@ -374,6 +374,45 @@ test('选区落在数学块内时拒绝', () => {
 	expectRejected(host, POPUP, editor, t('The selection is inside a code block, callout, or math block.'));
 });
 
+test('图片算一条候选：Show Popup In The Note 能打开它', () => {
+	const host = createHost();
+	registerCommands(host);
+	const modal = expectOpenedFirst(host, createEditor('![alt](p.png)'));
+	assert.equal(modal.source.size, 1, '图片计入候选总数');
+	assert.equal(modal.source.read(0).plain, 'alt', '纯文本回退取 alt');
+});
+
+test('关掉「放大图片」后图片不算候选项', () => {
+	const host = createHost({ blockKinds: { image: false } });
+	registerCommands(host);
+	runCommand(host, SHOW, createEditor('![alt](p.png)'));
+	assert.deepEqual([...notices], [t('No popup in the current note.')], '候选集与类别开关同源');
+	assert.equal(modals.length, 0);
+});
+
+test('选区里含图片行时照常转换（图片不是「容器」类，本轮回归点）', () => {
+	const host = createHost();
+	registerCommands(host);
+	const text = '![alt](p.png)';
+	const editor = createEditor(text, selectLines(text, 0, 0));
+	runCommand(host, POPUP, editor);
+	assert.deepEqual([...notices], [], '不该报「选区在代码块、标注或数学块内」');
+	assert.equal(editor.getValue(), '<p>\n![alt](p.png)\n</p>', '照常包裹成可放大的块');
+});
+
+test('选区同时含图片与围栏时，仍按围栏拒绝', () => {
+	const host = createHost();
+	registerCommands(host);
+	const text = '![alt](p.png)\n\n```js\ncode\n```';
+	const editor = createEditor(text, selectLines(text, 0, 4));
+	expectRejected(
+		host,
+		POPUP,
+		editor,
+		t('The selection is inside a code block, callout, or math block.'),
+	);
+});
+
 test('选区落在已有 HTML 块内时提示先 unpopup', () => {
 	const host = createHost();
 	registerCommands(host);

@@ -6,8 +6,8 @@ import type TextPopupPlugin from './main';
 import { refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
 
-/** 三类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
-export type BlockKindSettings = Record<'code' | 'callout' | 'math', boolean>;
+/** 四类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
+export type BlockKindSettings = Record<'code' | 'callout' | 'math' | 'image', boolean>;
 
 export interface TextPopupSettings {
 	/** 是否在实时预览中显示放大图标。 */
@@ -22,7 +22,7 @@ export interface TextPopupSettings {
 	popupFontSize: number;
 	/** 被标记时触发放大的标签列表（设置页可编辑）。 */
 	supportedTags: string[];
-	/** 代码块 / Callout / 数学块是否显示放大图标。 */
+	/** 代码块 / Callout / 数学块 / 图片是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
 	/** `Popup Selected Text` 包裹单行选区用的标签；必须是 supportedTags 里的块级标签。 */
 	singleLineTag: string;
@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupTextColor: '',
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
-	blockKinds: { code: true, callout: true, math: true },
+	blockKinds: { code: true, callout: true, math: true, image: true },
 	singleLineTag: 'p',
 	multiLineTag: 'div',
 };
@@ -76,6 +76,7 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 		code: readBoolean(data.code, DEFAULT_SETTINGS.blockKinds.code),
 		callout: readBoolean(data.callout, DEFAULT_SETTINGS.blockKinds.callout),
 		math: readBoolean(data.math, DEFAULT_SETTINGS.blockKinds.math),
+		image: readBoolean(data.image, DEFAULT_SETTINGS.blockKinds.image),
 	};
 }
 
@@ -179,6 +180,12 @@ export class TextPopupSettingTab extends PluginSettingTab {
 			'math',
 			t('Magnify math blocks'),
 			t('Show a magnifier icon for $$ math blocks in Live Preview.'),
+		);
+		this.addBlockKindSetting(
+			containerEl,
+			'image',
+			t('Magnify images'),
+			t('Show a magnifier icon for images in Live Preview.'),
 		);
 
 		new Setting(containerEl)
@@ -324,7 +331,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 		});
 	}
 
-	/** 三类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。 */
+	/** 四类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。 */
 	private addBlockKindSetting(
 		containerEl: HTMLElement,
 		key: keyof BlockKindSettings,

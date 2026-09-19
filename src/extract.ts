@@ -1,3 +1,5 @@
+import { WIKI_EMBED } from './blocks';
+
 /**
  * 从被标记的元素里取出用于放大的纯文本。
  *
@@ -63,6 +65,24 @@ export function extractCalloutBody(raw: string): string {
 /** 数学块的 TeX 源码：去掉 `$$` 定界符。 */
 export function extractMathBody(raw: string): string {
 	return raw.replace(/\$\$/g, '').trim();
+}
+
+/**
+ * 图片的纯文本回退：取 alt / 文件名，让「关闭富文本渲染」时仍看得出是哪张图。
+ *
+ * 两种写法的「第二段」含义不同，按 Obsidian 的约定处理：
+ * `![[p.png|100]]` 的第二段是尺寸（数字），`![[p.png|图注]]` 才是 alt；
+ * `![alt|120](url)` 里 `|` 之后是尺寸，alt 在 `[]` 里。
+ */
+export function extractImageBody(raw: string): string {
+	const wiki = WIKI_EMBED.exec(raw);
+	if (wiki) {
+		const parts = (wiki[1] ?? '').split('|').map((part) => part.trim());
+		const alt = parts.slice(1).find((part) => part && !/^\d+(x\d+)?$/.test(part));
+		return alt ?? parts[0] ?? raw;
+	}
+	const alt = /^!\[([^\]\n]*)\]/.exec(raw)?.[1]?.split('|')[0]?.trim();
+	return alt || raw;
 }
 
 /** 去首尾空行 + 按最小缩进整体左移（只左移，不吞内容）。 */

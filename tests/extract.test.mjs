@@ -14,7 +14,8 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { extractCalloutBody, extractFencedBody, extractMathBody } = await jiti.import('../src/extract.ts');
+const { extractCalloutBody, extractFencedBody, extractImageBody, extractMathBody } =
+	await jiti.import('../src/extract.ts');
 
 // —— extractFencedBody ——
 
@@ -64,4 +65,34 @@ test('嵌套引用只去一层前缀', () => {
 test('数学块去掉 $$ 定界符并收掉首尾空白', () => {
 	assert.equal(extractMathBody('$$a+b=c$$'), 'a+b=c', '同行');
 	assert.equal(extractMathBody('$$\na\n$$'), 'a', '跨行');
+});
+
+// —— extractImageBody ——
+//
+// 只用于「关闭富文本渲染」时的纯文本回退：让人看得出是哪张图就够，所以取 alt / 文件名。
+// 两种形态的「第二段」含义不同：wiki 形态的 `|100` 是尺寸（数字），`|图注` 才是 alt；
+// 路径形态的 alt 在 `[]` 里、`|` 之后是尺寸。
+
+test('wiki 形态取文件名', () => {
+	assert.equal(extractImageBody('![[p.png]]'), 'p.png');
+	assert.equal(
+		extractImageBody('![[Pasted image 20260918091231.png|100]]'),
+		'Pasted image 20260918091231.png',
+		'数字段是尺寸，跳过',
+	);
+	assert.equal(extractImageBody('![[p.png|100x200]]'), 'p.png', 'WxH 也是尺寸');
+});
+
+test('wiki 形态的非数字段是 alt', () => {
+	assert.equal(extractImageBody('![[p.png|图注]]'), '图注');
+});
+
+test('路径形态取 alt', () => {
+	assert.equal(extractImageBody('![5.png](https://example.com/5.png)'), '5.png');
+	assert.equal(extractImageBody('![图注|120](p.png)'), '图注', '| 之后是尺寸');
+	assert.equal(extractImageBody('![图注](p.png "标题")'), '图注', '标题在方括号之外');
+});
+
+test('没有 alt 时原样返回（返回空串会让候选被当成空块丢掉）', () => {
+	assert.equal(extractImageBody('![](p.png)'), '![](p.png)');
 });

@@ -41,7 +41,19 @@ test('老 data.json 缺 blockKinds / 包裹标签时逐项补齐', () => {
 
 test('blockKinds 缺键时逐键回落，已有的键保留', () => {
 	const settings = normalizeSettings({ blockKinds: { math: false } });
-	assert.deepEqual(settings.blockKinds, { code: true, callout: true, math: false });
+	assert.deepEqual(settings.blockKinds, { code: true, callout: true, math: false, image: true });
+});
+
+// —— 图片开关（V112） ——
+
+test('image 开关默认开启，且显式关闭时被保留', () => {
+	assert.equal(DEFAULT_SETTINGS.blockKinds.image, true, '默认开启');
+	assert.equal(normalizeSettings({ blockKinds: { image: false } }).blockKinds.image, false, '关掉被保留');
+});
+
+test('老 data.json（没有 image 键）升级后自动补 true，不需要迁移脚本', () => {
+	assert.equal(normalizeSettings({ blockKinds: { code: true, callout: true, math: true } }).blockKinds.image, true);
+	assert.equal(normalizeSettings({ blockKinds: 42 }).blockKinds.image, true, '类型不对也补默认');
 });
 
 // —— 数值回落 ——
