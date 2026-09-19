@@ -1,1 +1,1 @@
-- add new command: open the first popup block in current note
+- optimization for mermaid popup view
