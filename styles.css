@@ -160,6 +160,21 @@
 	padding: 6px 12px;
 }
 
+/* Mermaid：在弹窗里填满可用宽度，从而放大显示（盖掉 useMaxWidth 的 max-width 上限）。
+   弹窗是满屏，填满即约等于放到屏幕大小，比笔记列宽渲染更大。 */
+
+.mod-text-popup .text-popup-text.is-rich .mermaid {
+	width: 100%;
+	display: flex;
+	justify-content: center;
+}
+
+.mod-text-popup .text-popup-text.is-rich .mermaid > svg,
+.mod-text-popup .text-popup-text.is-rich .mermaid-wrapper > svg {
+    max-width: none;
+}
+
+
 /* iframe：先把容器宽度钉成确定值，否则 iframe 的百分比宽度会退回 UA 默认的 300px。
    iframe 的 width="100%" 相对**包含块**解析，而 .text-popup-text 是 flex 项、width: auto 时
    按内容收缩 —— 百分比宽度进了循环引用，浏览器只能按 UA 默认宽度落定。
