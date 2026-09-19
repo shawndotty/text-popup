@@ -79,5 +79,5 @@ export default {
 	'Magnified view': 'Magnified view',
 
 	// —— 放大图标的 aria-label ——
-	'Magnify text': 'Magnify text',
+	'Magnify text': 'Magnify',
 };
