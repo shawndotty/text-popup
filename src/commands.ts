@@ -12,7 +12,7 @@
 import { Notice } from 'obsidian';
 import type { App, Command, Editor, EventRef } from 'obsidian';
 import { isBlockLevelTag, scanTextBlocks } from './blocks';
-import type { TextBlockRegion } from './blocks';
+import type { BlockKind, TextBlockRegion } from './blocks';
 import { findOuterPopupElement, hasBlockBody, hasTooDeepIndent, htmlToMarkdown, isSingleLine, markdownToHtml } from './convert';
 import { t } from './lang/helpers';
 import { openFirstTextPopup } from './scanner';
@@ -97,6 +97,12 @@ function showFirstPopup(host: CommandHost, editor: Editor): void {
 	}
 }
 
+/**
+ * 「容器类」区间：选区落在里面时**不能**包标签 —— 围栏里标签会变字面文本，Callout 每行还要补 `>` 前缀，
+ * `$$` 数学块同理。图片与引用块不在其中（见 `popupSelection` 里的用法）。
+ */
+const CONTAINER_KINDS = new Set<BlockKind>(['code', 'callout', 'math']);
+
 /** Popup：把选中的 Markdown 文本转成可放大的 HTML 块。 */
 function popupSelection(host: CommandHost, editor: Editor): void {
 	if (editor.listSelections().length > 1) {
@@ -116,10 +122,13 @@ function popupSelection(host: CommandHost, editor: Editor): void {
 	}
 
 	// 在围栏里塞标签只会变成字面文本；Callout 每行还要补 `>` 前缀。一律拒绝，且一个字节都不改。
-	// 图片**不是**「容器」类：选区里有一行 `![x](p.png)` 照常转换（这一行以前压根不在候选里，
-	// 不把它排除就是本次改动引入的回归）。
+	// 「容器类」用显式白名单而不是「非图片 / 非引用」这类排除法：新增区间类别时漏改这一处，
+	// 代价是「该类别整段被误拒」；写成排除法时漏改的代价是**静默转换坏用户的笔记**。
+	// 图片与引用块**不在**其中：选区里有它们照常转换（引用留原文是既有设计，V113 起图片也照常）。
 	const clash = scanTextBlocks(editor.getValue()).find(
-		(region) => region.kind !== 'image' && overlaps(region, range.from.line, range.to.line),
+		(region) =>
+			(CONTAINER_KINDS.has(region.kind) || region.kind === 'html') &&
+			overlaps(region, range.from.line, range.to.line),
 	);
 	if (clash && clash.kind !== 'html') {
 		new Notice(t('The selection is inside a code block, callout, or math block.'));

@@ -8,7 +8,13 @@
  * 第 5 类 `image` 是唯一**不**走 `.cm-embed-block` 的：核心给图片 widget 自己建的容器是
  * `div.image-embed`（`addActions` 由编辑器 widget 的 `initDOM` 调用，在容器内建同一套
  * `.embed-actions`）。所以它照样有原生「放大」图标、照样算一条候选，只是注入锚点不同
- * （见 scanner.ts 的 `IMAGE_SELECTOR`）。
+ * （见 scanner/shared.ts 的 `IMAGE_SELECTOR`）。
+ *
+ * 第 6 类 `quote`（普通 Markdown 引用块 `> …`）是唯一**既没有容器、也没有原生图标**的一类：
+ * 实时预览里它只是一串 `.cm-line.HyperMD-quote`（实测普通引用行上一条 `.cm-embed-block`
+ * 都没有），所以既没有现成的 `.embed-actions` 可以插，也不能往行里插 DOM（会被 CM6 的
+ * DOMObserver 当成文档变更冲掉）—— 它的图标由 `scanner/quote.ts` 的 CodeMirror 装饰器承载。
+ * 本文件对它只负责「算出一条候选」，与另外五类同源。
  *
  * 为什么不用 DOM：Live Preview 只把视口附近的行渲染成 DOM，滚出视口的块连按钮都没有，
  * 于是「能翻到几条」会随滚动变化。数量必须是笔记的属性，不能是屏幕的属性。
@@ -39,8 +45,8 @@ const INLINE_TAGS = new Set(
 /** 核心对这几类标签不建 widget（`obsidian.asar` 里的排除表），扫描同样跳过。 */
 const SKIPPED_TAGS = new Set(['script', 'style', 'link', 'meta', 'object', 'embed', 'webview']);
 
-/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余四类是 Obsidian 原生区块。 */
-export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image';
+/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余五类是 Obsidian 原生区块。 */
+export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image' | 'quote';
 
 /** 一个可放大区间；行号 0 起，与 Editor 的行号一致。 */
 export interface TextBlockRegion {
@@ -48,7 +54,8 @@ export interface TextBlockRegion {
 	startLine: number;
 	endLine: number;
 	/**
-	 * 该区间的原始文本，与核心 widget 的输入一致：前四类含围栏 / `> ` 前缀 / `$$`；
+	 * 该区间的原始文本，与核心 widget 的输入一致：前四类含围栏 / `> ` 前缀 / `$$`，
+	 * 引用块含每行的 `> ` 前缀（喂给 `MarkdownRenderer` 正好渲染成一个 `<blockquote>`）；
 	 * `image` 类是**命中的那段图片语法**（不是整行 —— 引用行 / 列表行的 `> ` / `- ` 前缀
 	 * 喂给 MarkdownRenderer 会多渲染出一层引用块 / 列表项）。
 	 */
@@ -201,6 +208,28 @@ function hasImageExtension(target: string): boolean {
 }
 
 /**
+ * 引用块：连续以 `>` 开头的行算一段（第 6 类）。
+ *
+ * 三条位置 / 取舍都来自真机实测（见 Plan-20260920-090604 §2）：
+ * 1. 排在 `matchCallout` **之后**：`> [!note]` 是 Callout，先被上面那类吃掉（Callout 仍是一条候选）。
+ * 2. 排在 `matchImageBlock` **之前**：引用行里的图片不再单独成条 —— 一个视觉块只出一条候选、
+ *    只挂一个图标，与「Callout 内的图片不单独成条」一致。
+ * 3. 只认 `>` 前缀，不认懒惰续行：`> a` 的下一行写 `b`（实测带 `HyperMD-quote-lazy`，仍画在
+ *    引用条里）时不并入区间 —— 与 `matchCallout` 的既有取舍一致，宁可少收一行，也不引入
+ *    一套近似 CommonMark 的启发式。
+ *
+ * `raw` 不需要覆写（默认就是整段原文，保留每行的 `> ` 前缀）：`> a\n> b` 喂给
+ * `MarkdownRenderer` 正好渲染成一个 `<blockquote>`，弹窗里因此带引用条。
+ */
+function matchQuoteBlock(lines: readonly string[], start: number): BlockMatch | null {
+	if (!QUOTE_LINE.test(lines[start] ?? '')) return null;
+
+	let end = start;
+	while (end + 1 < lines.length && QUOTE_LINE.test(lines[end + 1] ?? '')) end++;
+	return { kind: 'quote', endLine: end, include: true };
+}
+
+/**
  * 图片：单行区间。
  *
  * 三条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
@@ -234,17 +263,18 @@ function matchImageBlock(lines: readonly string[], start: number): BlockMatch | 
 	return { kind: 'image', endLine: start, include: true, raw: hit[0] };
 }
 
-/** 同一行的类别优先级：`$$`、围栏、`> [!`、`<tag>` 互斥；图片排在最后（外层优先）。 */
+/** 同一行的类别优先级：`$$`、围栏、`> [!`、`<tag>` 互斥；引用排在图片之前（外层优先）。 */
 const MATCHERS: ReadonlyArray<(lines: readonly string[], start: number) => BlockMatch | null> = [
 	matchMathBlock,
 	matchFencedBlock,
 	matchCallout,
 	matchHtmlBlock,
+	matchQuoteBlock,
 	matchImageBlock,
 ];
 
 /**
- * 单趟扫描全文，按文档顺序返回五类区间。
+ * 单趟扫描全文，按文档顺序返回六类区间。
  *
  * 命中任一起始判据就吃下整段区间，然后从区间末尾继续 —— 因此区间**天然不重叠、外层优先**。
  * 这一条是必需的，不是优化：Callout 里嵌的代码块在 Live Preview 里不会生成独立的

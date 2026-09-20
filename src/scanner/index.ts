@@ -1,12 +1,13 @@
 /**
  * scanner 模块对外门面：注册扫描、刷新按钮、移除全部按钮。
  *
- * 重新导出 `TextPopupHost` / `createTextPopupSource` / `openFirstTextPopup`，
+ * 重新导出 `TextPopupHost` / `createTextPopupSource` / `openFirstTextPopup` / `notifyQuoteActionsChanged`，
  * 外部调用方的 `import … from './scanner'` 无需改动。
  */
 
 import { debounce, Platform } from 'obsidian';
 import { injectAction, injectFlairAction, injectImageAction, removeAction, removeFlairAction } from './inject';
+import { notifyQuoteActionsChanged, quoteActionsExtension, registerQuoteHover, QUOTE_ACTION_CLASS } from './quote';
 import { createTextPopupSource, openFirstTextPopup } from './session';
 import {
 	ACTION_CLASS,
@@ -33,9 +34,20 @@ export function registerBlockScanner(host: TextPopupHost): void {
 	host.registerEvent(host.app.workspace.on('layout-change', () => refreshTextPopupActions(host)));
 	host.registerEvent(host.app.workspace.on('active-leaf-change', () => refreshTextPopupActions(host)));
 	host.registerEvent(host.app.workspace.on('file-open', () => refreshTextPopupActions(host)));
+
+	// 第四处注入点：引用块。走 CodeMirror 装饰器（不是 DOM 注入），注册一次即可，
+	// 卸载时由 Obsidian 自动摘掉扩展；悬停显隐靠一次委托监听，随插件一起清理。
+	host.registerEditorExtension(quoteActionsExtension(host));
+	registerQuoteHover(host);
 }
 
-/** 重新扫描并按当前设置同步按钮（设置变更、开关切换时也会调用）。 */
+/**
+ * 重新扫描并按当前设置同步按钮（设置变更、开关切换时也会调用）。
+ *
+ * 只管前两处**由本函数负责**的注入点（`.cm-embed-block` 与 `.code-block-flair`）与图片那处；
+ * **引用块不在这里**：它的图标由 CM6 装饰器托管、随文档变更自动重算，设置变更则走
+ * `notifyQuoteActionsChanged`（见 `scanner/quote.ts`，那里也写清了为什么不能塞进这条路径）。
+ */
 export function refreshTextPopupActions(host: TextPopupHost): void {
 	if (!host.settings.enabled) {
 		removeAllActions();
@@ -65,12 +77,20 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 	});
 }
 
-/** 移除本插件注入的全部按钮（禁用插件、关闭开关时使用）。 */
+/**
+ * 移除本插件注入的全部按钮（禁用插件、关闭开关时使用）。
+ *
+ * 必须跳过引用块的按钮（`.text-popup-quote-action`）：它的 DOM 归 CM6 的装饰器托管，
+ * 删掉之后 widget 会变成空壳、**不会自己长回来**（装饰集没变、CM6 不会重建 widget）。
+ * 引用块图标的显隐由装饰集控制：关总开关时 `notifyQuoteActionsChanged` 把装饰集清空。
+ */
 export function removeAllActions(): void {
-	activeDocument.querySelectorAll<HTMLElement>(`.${ACTION_CLASS}`).forEach((actionEl) => {
-		actionEl.remove();
-	});
+	activeDocument
+		.querySelectorAll<HTMLElement>(`.${ACTION_CLASS}:not(.${QUOTE_ACTION_CLASS})`)
+		.forEach((actionEl) => {
+			actionEl.remove();
+		});
 }
 
-export { createTextPopupSource, openFirstTextPopup };
+export { createTextPopupSource, openFirstTextPopup, notifyQuoteActionsChanged };
 export type { TextPopupHost };

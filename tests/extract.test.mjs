@@ -1,7 +1,7 @@
 /**
- * `extract.ts` 的正文提取用例 —— 围栏代码块 / Callout / 数学块的「去壳」。
+ * `extract.ts` 的正文提取用例 —— 围栏代码块 / Callout / 引用块 / 数学块的「去壳」。
  *
- * 这三个函数只在「关闭富文本渲染」的纯文本回退路径上使用（打开时弹窗直接回灌区间原文，
+ * 这些函数只在「关闭富文本渲染」的纯文本回退路径上使用（打开时弹窗直接回灌区间原文，
  * 交给 MarkdownRenderer 渲染），所以它们的职责很窄：把壳去掉、把首尾空白收掉。
  *
  * 刻意没测：`extractText` 与 `extractRichSource`。两者依赖真实布局（`innerText`、`cloneNode`
@@ -14,7 +14,7 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { extractCalloutBody, extractFencedBody, extractImageBody, extractMathBody } =
+const { extractCalloutBody, extractFencedBody, extractImageBody, extractMathBody, extractQuoteBody } =
 	await jiti.import('../src/extract.ts');
 
 // —— extractFencedBody ——
@@ -58,6 +58,30 @@ test('没有 [!TYPE] 的普通引用只去前缀', () => {
 
 test('嵌套引用只去一层前缀', () => {
 	assert.equal(extractCalloutBody('> [!note]\n> > inner'), '> inner');
+});
+
+// —— extractQuoteBody ——
+//
+// 引用块的纯文本回退：与 `extractCalloutBody` 共用「去一层 `> ` 前缀」那段逻辑，区别只有一条 ——
+// **不剥 `[!TYPE]`**：`> [!note] x` 在扫描器里是 Callout（`matchCallout` 先命中），真走到引用块时
+// `[!note]` 就是用户想看的原文。
+
+test('引用块去掉每行的 > 前缀并收掉首尾空白', () => {
+	assert.equal(extractQuoteBody('> a\n> b'), 'a\nb');
+	assert.equal(extractQuoteBody('> a\n> '), 'a', '末尾的裸 `>` 行被 trim 掉');
+});
+
+test('嵌套引用只去一层前缀', () => {
+	assert.equal(extractQuoteBody('> > inner'), '> inner');
+});
+
+test('引用块不剥 Callout 标记（剥它的是 extractCalloutBody）', () => {
+	assert.equal(extractQuoteBody('> [!note] x'), '[!note] x');
+});
+
+test('前导空格 ≤3 个的 `>` 同样去前缀（4 个空格是缩进代码块）', () => {
+	assert.equal(extractQuoteBody('   > a'), 'a');
+	assert.equal(extractQuoteBody('    > a'), '> a');
 });
 
 // —— extractMathBody ——

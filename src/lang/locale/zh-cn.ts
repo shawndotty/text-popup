@@ -21,6 +21,9 @@ const zhCN: Partial<typeof en> = {
 	'Magnify images': '放大图片',
 	'Show a magnifier icon for images in Live Preview.':
 		'为实时预览里的图片显示放大图标。',
+	'Magnify quotes': '放大引用块',
+	'Show a magnifier icon for blockquotes in Live Preview.':
+		'为实时预览里的引用块显示放大图标。',
 	'Render HTML and Markdown': '渲染 HTML 与 Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		'在弹窗内按语法渲染块里的 HTML 与 Markdown。关闭后按纯文本原样显示。',

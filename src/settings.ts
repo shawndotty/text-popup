@@ -3,11 +3,11 @@ import type { DropdownComponent } from 'obsidian';
 import { isBlockLevelTag } from './blocks';
 import { t } from './lang/helpers';
 import type TextPopupPlugin from './main';
-import { refreshTextPopupActions } from './scanner';
+import { notifyQuoteActionsChanged, refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
 
-/** 四类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
-export type BlockKindSettings = Record<'code' | 'callout' | 'math' | 'image', boolean>;
+/** 五类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
+export type BlockKindSettings = Record<'code' | 'callout' | 'math' | 'image' | 'quote', boolean>;
 
 export interface TextPopupSettings {
 	/** 是否在实时预览中显示放大图标。 */
@@ -22,7 +22,7 @@ export interface TextPopupSettings {
 	popupFontSize: number;
 	/** 被标记时触发放大的标签列表（设置页可编辑）。 */
 	supportedTags: string[];
-	/** 代码块 / Callout / 数学块 / 图片是否显示放大图标。 */
+	/** 代码块 / Callout / 数学块 / 图片 / 引用块是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
 	/** `Popup Selected Text` 包裹单行选区用的标签；必须是 supportedTags 里的块级标签。 */
 	singleLineTag: string;
@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupTextColor: '',
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
-	blockKinds: { code: true, callout: true, math: true, image: true },
+	blockKinds: { code: true, callout: true, math: true, image: true, quote: true },
 	singleLineTag: 'p',
 	multiLineTag: 'div',
 };
@@ -77,6 +77,7 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 		callout: readBoolean(data.callout, DEFAULT_SETTINGS.blockKinds.callout),
 		math: readBoolean(data.math, DEFAULT_SETTINGS.blockKinds.math),
 		image: readBoolean(data.image, DEFAULT_SETTINGS.blockKinds.image),
+		quote: readBoolean(data.quote, DEFAULT_SETTINGS.blockKinds.quote),
 	};
 }
 
@@ -160,6 +161,8 @@ export class TextPopupSettingTab extends PluginSettingTab {
 					this.plugin.settings.enabled = value;
 					await this.plugin.saveSettings();
 					refreshTextPopupActions(this.plugin);
+					// 引用块的图标不归 refreshTextPopupActions 管（装饰集），要单独发一次刷新信号
+					notifyQuoteActionsChanged(this.plugin);
 				}),
 			);
 
@@ -186,6 +189,12 @@ export class TextPopupSettingTab extends PluginSettingTab {
 			'image',
 			t('Magnify images'),
 			t('Show a magnifier icon for images in Live Preview.'),
+		);
+		this.addBlockKindSetting(
+			containerEl,
+			'quote',
+			t('Magnify quotes'),
+			t('Show a magnifier icon for blockquotes in Live Preview.'),
 		);
 
 		new Setting(containerEl)
@@ -331,7 +340,12 @@ export class TextPopupSettingTab extends PluginSettingTab {
 		});
 	}
 
-	/** 四类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。 */
+	/**
+	 * 五类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。
+	 *
+	 * 引用块不在 `refreshTextPopupActions` 的覆盖范围里（它的图标由 CM6 装饰器托管），
+	 * 只有它的开关需要额外发一次刷新信号；别的类别不必为此重建装饰集。
+	 */
 	private addBlockKindSetting(
 		containerEl: HTMLElement,
 		key: keyof BlockKindSettings,
@@ -346,6 +360,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 					this.plugin.settings.blockKinds[key] = value;
 					await this.plugin.saveSettings();
 					refreshTextPopupActions(this.plugin);
+					if (key === 'quote') notifyQuoteActionsChanged(this.plugin);
 				}),
 			);
 	}

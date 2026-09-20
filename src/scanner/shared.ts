@@ -3,6 +3,7 @@
  */
 
 import type { BlockKind } from '../blocks';
+import type { Extension } from '@codemirror/state';
 import type { App, EventRef } from 'obsidian';
 import type { TextPopupSettings } from '../settings';
 
@@ -37,6 +38,16 @@ export const CODE_FLAIR_SELECTOR = '.code-block-flair';
  * （详见 inject.ts 的 `injectImageAction`）
  */
 export const IMAGE_SELECTOR = '.cm-content .image-embed';
+
+/**
+ * 第四处注入点：Markdown 引用块（`> …`）—— 唯一**不是** DOM 注入的一处。
+ *
+ * 引用行在实时预览里没有容器（实测普通引用行上一条 `.cm-embed-block` 都没有），往 `.cm-line`
+ * 里插的节点又会被 CM6 的 DOMObserver 冲掉，所以图标由 `scanner/quote.ts` 的 CodeMirror
+ * 装饰器（`ViewPlugin` + `Decoration.widget`）承载，DOM 归 CM6 托管。
+ * 这里只留下「怎么认出一条引用行」的类名与它的容器类名。
+ */
+export const QUOTE_LINE_SELECTOR = '.cm-line.HyperMD-quote';
 /** 离屏测量容器的类名（弹窗打开期间存在，关闭时移除）。 */
 export const MEASURE_CLASS = 'text-popup-measure';
 export const SCAN_DEBOUNCE_MS = 150;
@@ -47,6 +58,13 @@ export interface TextPopupHost {
 	settings: TextPopupSettings;
 	register(cleanup: () => void): void;
 	registerEvent(eventRef: EventRef): void;
+	/**
+	 * 往编辑器里挂一个 CodeMirror 扩展（`Plugin.registerEditorExtension` 的同名签名）。
+	 *
+	 * 只有引用块用得上它：引用行没有容器、也不能往行里插 DOM，它的放大图标必须由 CM6 托管的
+	 * 装饰器承载（见 `scanner/quote.ts`）。`main.ts` 传进来的 `this` 本来就有这个方法。
+	 */
+	registerEditorExtension(extension: Extension): void;
 }
 
 /**

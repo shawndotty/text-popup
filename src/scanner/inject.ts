@@ -1,5 +1,8 @@
 /**
- * scanner 模块的图标注入与移除：在三类区块的控制栏里插入放大图标。
+ * scanner 模块的图标注入与移除：在四类区块的控制栏里插入放大图标。
+ *
+ * 四处锚点里，前两处是「往核心建好的容器 / chip 里插节点」，第三处是图片嵌入，
+ * 第四处（引用块）不走 DOM —— 唯一由 CM6 装饰器托管的一处，见 `scanner/quote.ts`。
  */
 
 import { setIcon } from 'obsidian';
@@ -50,15 +53,18 @@ export function injectAction(blockEl: HTMLElement, host: TextPopupHost, kind: im
 /**
  * 往图片嵌入的 `.embed-actions` 里注入放大图标，插在首位 = 原生「放大」（lucide-zoom-in）图标的左侧。
  *
- * 与 `injectAction` 的差别只有锚点与两条守卫：
+ * 与 `injectAction` 的差别只有锚点与三条守卫：
  * - 没有 `.embed-actions` 的图片（Callout 内 / 行内 HTML 里的 `span.image-embed`）天然跳过 ——
  *   这类图片在扫描器里也不产候选，两边一致；
  * - 嵌入笔记（`![[某笔记]]`）里的图片不注入：候选集来自**外层笔记的文本**，在那里点开也定位不到。
+ * - 引用行（`> ![x](p.png)`）里的图片不注入：整行由外层引用块覆盖（候选集里没有它），
+ *   挂了就是「点开翻出别的块」的死图标 —— 与「Callout 内的图片不单独成条」同一条口径。
  */
 export function injectImageAction(imageEl: HTMLElement, host: TextPopupHost): void {
 	const actionsEl = imageEl.querySelector<HTMLElement>(ACTIONS_SELECTOR);
 	if (!actionsEl) return;
 	if (imageEl.closest('.markdown-embed')) return;
+	if (imageEl.closest('.cm-line.HyperMD-quote')) return;
 	if (actionsEl.querySelector<HTMLElement>(`:scope > .${ACTION_CLASS}`)) return;
 	actionsEl.insertBefore(createActionEl(actionsEl, host, 'embed-action'), actionsEl.firstChild);
 }
@@ -79,13 +85,13 @@ export function injectFlairAction(flairEl: HTMLElement, host: TextPopupHost): vo
 }
 
 /**
- * 建按钮并接好交互 —— 三处锚点共用。
+ * 建按钮并接好交互 —— 四处锚点共用（引用块那一处是唯一不注入 DOM 的，见 `scanner/quote.ts`）。
  *
  * `inline` 用 span：代码块 chip 是行内的 `display: inline-block`，div 会在里面另起一行。
  * interactive-child 是核心约定的「交互子元素」标记：核心的点击接管与双击进块都会跳过它。
  * 图标用 maximize-2 而不是 zoom-in，避免与弹窗控制条上的「整体放大」图标混淆。
  */
-function createActionEl(
+export function createActionEl(
 	parent: HTMLElement,
 	host: TextPopupHost,
 	classes: string,

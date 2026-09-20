@@ -1,5 +1,5 @@
 /**
- * `blocks.ts` 的行为用例 —— 五类区块的扫描与标签判定。
+ * `blocks.ts` 的行为用例 —— 六类区块的扫描与标签判定。
  *
  * 这是「能翻到几条」的事实来源：扫描结果直接决定 Live Preview 里哪些块会拿到放大图标。
  * 最需要守住的不变量是**区间不重叠、外层优先**：Callout 里嵌的代码块在核心里不生成独立的
@@ -10,6 +10,7 @@
  *   （`SKIPPED_TAGS` 实际生效的是同在块级表里的 `link` / `meta`）。
  * - ` ```a`b ` 这类信息串里含反引号的写法，本实现仍按围栏起点处理，与文件头注释所述的
  *   markdown-it 规则不一致（markdown-it 要求反引号围栏的信息串不含反引号）。
+ * - 引用块只认 `>` 前缀，**不认懒惰续行**（与 `matchCallout` 同一取舍，见下方用例）。
  *
  * 刻意没测：无。本文件只 import 纯函数模块，不需要 obsidian 桩。
  */
@@ -134,31 +135,45 @@ test('Callout 到第一个非引用行为止，折叠标记不影响识别', () 
 	assert.deepEqual(outline('> [!tip]- Title\n> body'), ['callout:0-1']);
 });
 
-test('没有 [!TYPE] 的普通引用不算 Callout', () => {
-	assert.deepEqual(outline('> 普通引用\n> 第二行'), []);
+test('没有 [!TYPE] 的普通引用是 quote 区间（不再是「什么都不算」）', () => {
+	assert.deepEqual(outline('> 普通引用\n> 第二行'), ['quote:0-1']);
+	assert.ok(
+		scanTextBlocks('> 普通引用\n> 第二行').every((region) => region.kind !== 'callout'),
+		'没有 [!TYPE] 就不是 Callout（V114 起它是第 6 类 quote）',
+	);
 });
 
 // —— 图片（第 5 类）——
 //
-// 正例的六种写法都在真机探针里量过：独立行 / 引用行 / 列表行都会生成带 `.embed-actions` 的
+// 正例的写法都在真机探针里量过：独立行 / 列表行都会生成带 `.embed-actions` 的
 // `.image-embed`（因此有原生放大图标、也必须有我们的一条候选）。反例都是**实测没有图标**的
 // 写法，放进候选就会变成「能翻到、但永远没有图标」的幽灵条目。
+// 注意：行首是 `>` 的图片**不在这里** —— V114 起它由外层引用块整行覆盖（见「引用块」一节）。
 
-test('六种图片写法各产出一条单行区间，raw 是命中的语法片段', () => {
+test('五种图片写法各产出一条单行区间，raw 是命中的语法片段', () => {
 	const cases = [
 		'![alt](p.png)',
 		'![[p.png]]',
 		'![[p.png|100]]',
 		'![alt|120](p.png)',
-		'> ![alt](p.png)',
 		'- ![alt](p.png)',
 	];
 	for (const line of cases) {
 		const regions = scanTextBlocks(line);
 		assert.deepEqual(outline(line), ['image:0-0'], `区间：${line}`);
-		// 引用行 / 列表行的 `> ` `- ` 前缀不能进 raw：整行喂给 MarkdownRenderer 会多一层壳
+		// 列表行的 `- ` 前缀不能进 raw：整行喂给 MarkdownRenderer 会多一层壳
 		assert.equal(regions[0]?.raw, line.replace(/^ *[-*>] ?/, ''), `raw：${line}`);
 	}
+});
+
+test('行首是 `>` 的图片由引用块覆盖，不再单独成条（V114 行为变更）', () => {
+	assert.deepEqual(outline('> ![alt](p.png)'), ['quote:0-0'], '一个视觉块只出一条候选');
+	assert.equal(
+		scanTextBlocks('> ![alt](p.png)')[0]?.raw,
+		'> ![alt](p.png)',
+		'raw 保留 `> ` 前缀，弹窗里仍能看到这张图',
+	);
+	assert.deepEqual(outline('- ![alt](p.png)'), ['image:0-0'], '列表行不受影响');
 });
 
 test('图片的 target 解析：外链 / 角括号 / 标题 / #? 参数', () => {
@@ -201,7 +216,7 @@ test('Callout / 围栏 / HTML 块体内的图片被外层吞掉，总数不变',
 	assert.deepEqual(outline('<div>\n![x](p.png)\n</div>'), ['html:0-2'], 'HTML 块内');
 });
 
-test('图片与其它四类混排时不重叠、按文档顺序', () => {
+test('图片与其它几类混排时不重叠、按文档顺序', () => {
 	const regions = scanTextBlocks(
 		[
 			'![[cover.png]]', // 0 图片
@@ -223,6 +238,55 @@ test('图片与其它四类混排时不重叠、按文档顺序', () => {
 	assert.deepEqual(
 		regions.map((region) => `${region.kind}:${region.startLine}-${region.endLine}`),
 		['image:0-0', 'code:2-4', 'callout:6-7', 'math:9-9', 'html:11-13'],
+	);
+	for (let index = 1; index < regions.length; index++) {
+		assert.ok(
+			(regions[index - 1]?.endLine ?? -1) < (regions[index]?.startLine ?? -1),
+			`第 ${index} 个区间与前一个重叠`,
+		);
+	}
+});
+
+// —— 引用块（第 6 类）——
+//
+// V114 新增。它与其他五类的关系有两条是**行为约定**，都钉在下面：
+// 1. `> [!TYPE]` 仍是 Callout（`matchCallout` 排在前面），普通引用才是 quote；
+// 2. 引用行里的图片被整段引用覆盖（上面的第 5 类一节已点名），所以「一个视觉块 = 一条候选」。
+
+test('连续 `>` 行成一段引用块，raw 是整段原文（保留 `> ` 前缀）', () => {
+	assert.deepEqual(outline('> a'), ['quote:0-0'], '单行');
+	assert.deepEqual(outline('> a\n> b'), ['quote:0-1'], '多行成一段');
+	assert.deepEqual(outline('> a\n> b\n> '), ['quote:0-2'], '末尾的裸 `>` 行收进同一段');
+	assert.deepEqual(outline('> a\n> > inner'), ['quote:0-1'], '嵌套引用由外层覆盖，算一条');
+	assert.deepEqual(outline('> a\n> - 列表\n> - 第二个'), ['quote:0-2'], '引用里的列表在同一段内');
+	assert.equal(
+		scanTextBlocks('> a\n> b')[0]?.raw,
+		'> a\n> b',
+		'raw 保留 `> ` 前缀：喂给 MarkdownRenderer 正好渲染成一个 blockquote',
+	);
+});
+
+test('`> [!TYPE]` 仍优先算 Callout，不是 quote', () => {
+	assert.deepEqual(outline('> [!note]\n> body'), ['callout:0-1']);
+});
+
+test('引用块只认 `>` 前缀，不认懒惰续行（与 matchCallout 同一取舍）', () => {
+	assert.deepEqual(outline('> a\n懒惰续行'), ['quote:0-0'], '无 `>` 的第二行不并入');
+	assert.deepEqual(outline('> a\n# 标题'), ['quote:0-0'], '引用后接标题即结束');
+	assert.deepEqual(outline('普通引用\n> 第二行'), ['quote:1-1'], '`>` 之前的行为普通段落');
+});
+
+test('引用块不被外层吞掉，也不吞掉外层：围栏里 / HTML 块里的 `>` 行不算引用', () => {
+	assert.deepEqual(outline('> ```js\n> code\n> ```'), ['quote:0-2'], '行首 `>` 后接围栏：整段算引用，不另成代码块');
+	assert.deepEqual(outline('```\n> a\n```'), ['code:0-2'], '围栏内的 `>` 行不算引用');
+	assert.deepEqual(outline('<div>\n> a\n</div>'), ['html:0-2'], 'HTML 块内的 `>` 行不算引用');
+});
+
+test('引用块与图片混排时不重叠、按文档顺序', () => {
+	const regions = scanTextBlocks('> a\n\n![x](p.png)\n\n> b');
+	assert.deepEqual(
+		regions.map((region) => `${region.kind}:${region.startLine}-${region.endLine}`),
+		['quote:0-0', 'image:2-2', 'quote:4-4'],
 	);
 	for (let index = 1; index < regions.length; index++) {
 		assert.ok(

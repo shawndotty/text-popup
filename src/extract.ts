@@ -52,12 +52,34 @@ const FENCE_OPEN = /^ {0,3}(?:`{3,}|~{3,})/;
 const FENCE_ONLY = /^ {0,3}(?:`{3,}|~{3,})\s*$/;
 
 /**
+ * 引用块与 Callout 共用：去掉每行的 `> ` 前缀（只去一层，嵌套的 `> > ` 保留内层）。
+ *
+ * 前导空格上限与 `blocks.ts` 的 `QUOTE_LINE` 对齐（≤3 个），4 空格缩进的 `>` 属于缩进代码块。
+ */
+function stripQuotePrefix(raw: string): string {
+	return raw
+		.split('\n')
+		.map((line) => line.replace(/^ {0,3}> ?/, ''))
+		.join('\n');
+}
+
+/**
+ * 引用块的正文：只去 `> ` 前缀，不剥 `[!TYPE]`。
+ *
+ * 与 `extractCalloutBody` 分开是有意的：`> [!note] x` 这种写法在扫描器里是 **Callout**
+ * （`matchCallout` 先命中），只有真的走到引用块才会用这里 —— 此时 `[!note]` 是用户想看的原文。
+ */
+export function extractQuoteBody(raw: string): string {
+	return stripQuotePrefix(raw).trim();
+}
+
+/**
  * Callout 的正文：去掉每行的 `> ` 前缀，再去掉首行的 `[!TYPE]` 标记（保留标题文字）。
  *
  * 标题行保留是有意为之：点开 Callout 通常也要看标题；想只看正文可关闭「渲染 HTML 与 Markdown」。
  */
 export function extractCalloutBody(raw: string): string {
-	const lines = raw.split('\n').map((line) => line.replace(/^ {0,3}> ?/, ''));
+	const lines = stripQuotePrefix(raw).split('\n');
 	if (lines.length > 0) lines[0] = (lines[0] ?? '').replace(/^\[![^\]]+\][+-]?\s*/, '');
 	return lines.join('\n').trim();
 }

@@ -42,6 +42,23 @@
 	vertical-align: middle;
 }
 
+/* 引用块的放大图标：它由 CM6 装饰器托管（见 scanner/quote.ts），DOM 形状仍是核心那套
+   `div.embed-actions > div.embed-action`，所以容器 / 按钮 / 位置 / 默认透明度全部沿用核心的
+   `.markdown-source-view.mod-cm6 .embed-actions`（绝对定位、行右上角 4px、opacity: 0）
+   与 `.embed-action`（胶囊皮肤），这里只需要补「显隐」这一件事。
+
+   为什么必须自己补：核心只在 `.cm-embed-block:hover` 与 `.image-embed:hover` 里把 opacity 抬到 1，
+   而引用行两种都不是。两条规则叠加：
+   ① 悬停块的**首行**（纯 CSS，JS 失效时的兜底；图标挂在首行，见 buildDecorations）；
+   ② 悬停块内**任意一行**（由 scanner/quote.ts 的委托监听在容器上写 data-*）。
+   两条都带 `.markdown-source-view.mod-cm6` 前缀，与本文件其它编辑器内规则同一作用域
+   （核心那条 `opacity: 0` 也是同前缀的 `.embed-actions` 规则）。 */
+
+.markdown-source-view.mod-cm6 .cm-line.HyperMD-quote:hover > .text-popup-quote-actions,
+.markdown-source-view.mod-cm6 .text-popup-quote-actions[data-text-popup-hover='true'] {
+	opacity: 1;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。

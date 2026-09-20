@@ -22,6 +22,9 @@ export default {
 	'Magnify images': 'Magnify images',
 	'Show a magnifier icon for images in Live Preview.':
 		'Show a magnifier icon for images in Live Preview.',
+	'Magnify quotes': 'Magnify quotes',
+	'Show a magnifier icon for blockquotes in Live Preview.':
+		'Show a magnifier icon for blockquotes in Live Preview.',
 	'Render HTML and Markdown': 'Render HTML and Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
