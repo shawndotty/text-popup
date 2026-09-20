@@ -100,6 +100,40 @@ export function zoomScrollDelta(
 	return { left: k * point.x, top: k * point.y };
 }
 
+/**
+ * 画布（滚动容器可见区）的中心，屏幕坐标。
+ *
+ * 用 client 盒而不是 bounding box：`clientLeft/clientTop` 是边框内侧、`clientWidth/Height` 不含滚动条，
+ * 「画布」指的正是这一块。入参收成结构化对象而不是 `HTMLElement`，是为了测试里能喂假值
+ * （与 `headingColorVariables(style: { getPropertyValue })` 同一条理由）。
+ */
+export function viewportCenter(scroller: {
+	getBoundingClientRect(): { left: number; top: number };
+	clientLeft: number;
+	clientTop: number;
+	clientWidth: number;
+	clientHeight: number;
+}): { x: number; y: number } {
+	const rect = scroller.getBoundingClientRect();
+	return {
+		x: rect.left + scroller.clientLeft + scroller.clientWidth / 2,
+		y: rect.top + scroller.clientTop + scroller.clientHeight / 2,
+	};
+}
+
+/**
+ * 把点从屏幕位置 `from` 挪到 `to` 所需的滚动增量。
+ *
+ * 内容是往右 / 往下走，滚动量就要往反方向走，所以是 `from − to`。
+ * 与 `zoomScrollDelta` 配合：前者负责「以点击处为锚」，后者再把它推到画布中心。
+ */
+export function scrollToMove(
+	from: { x: number; y: number },
+	to: { x: number; y: number },
+): { left: number; top: number } {
+	return { left: from.x - to.x, top: from.y - to.y };
+}
+
 /** 单个条目的内容。 */
 export interface TextPopupBody {
 	/** 纯文本内容（extractText），回退路径使用。 */
@@ -134,7 +168,7 @@ export interface TextPopupSource {
  * - 标题栏显示来源笔记名，便于溯源；同一笔记有多个被标记块时附带「当前 / 总数」序号。
  * - 用 ← / → 在同一个笔记的全部被标记块之间切换，环绕规则与内置图片 lightbox 一致。
  * - 底部控制条提供字号与缩放；只影响本次弹窗，不写回设置。
- * - `Alt(Option)+Click` 以点击处为锚放大（再点还原），放大后按住空格可拖拽平移。
+ * - `Alt(Option)+Click` 以点击处为锚放大、并把它推到画布中心（再点还原），放大后按住空格可拖拽平移。
  * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
  */
 export class TextPopupModal extends Modal {
@@ -211,11 +245,25 @@ export class TextPopupModal extends Modal {
 	 *
 	 * 用**文档级** keydown/keyup 而不是 Modal 的 scope —— scope 只有 keydown，
 	 * 收不到「松开空格」，而平移必须在松手时结束。
+	 *
+	 * ⚠️ 必须注册在 **capture 阶段**：控制条按钮自己也有 keydown（Enter = 激活按钮），而弹窗一打开
+	 * 焦点就被核心送到第一个按钮上（见 Plan-20260920-161511 §3.1 证据①）—— 冒泡阶段注册时按钮先手，
+	 * 「按住空格」会变成「反复点那个按钮」（字号 / 缩放一路变、内容重排、画布跳动），平移根本进不去。
+	 * capture 阶段先手 + stopPropagation，按钮再也看不到空格；`repeat` 必须一并吞掉。
 	 */
 	private onKeyDown = (evt: KeyboardEvent): void => {
-		if (evt.key !== ' ' || evt.repeat || evt.defaultPrevented) return;
-		if (this.isControlTarget(evt.target)) return; // 焦点在控制条按钮上时，空格是「激活按钮」
+		if (evt.key !== ' ' || evt.defaultPrevented) return;
+		// 只收自己弹窗里的空格：弹窗开着时用户又开了别的 Modal（快速切换、命令面板…），
+		// 那里面的输入框要能正常打空格。
+		//
+		// 判据是「不属于**别的** Modal 容器」，而不是「在 `modalEl` 之内」：在弹窗正文里点一下
+		// （非 `Alt` 的普通点击）核心会把焦点退回 `<body>`，此时「在 modalEl 之内」恒为假、
+		// 空格平移会**整个失效**。实测见 Report-20260920-182816 §4。
+		const holder = evt.target instanceof Element ? evt.target.closest('.modal-container') : null;
+		if (holder && !holder.contains(this.modalEl)) return;
 		evt.preventDefault(); // 压掉空格的翻页滚动
+		evt.stopPropagation(); // 控制条按钮 / 核心的 keydown 都收不到
+		if (evt.repeat) return; // 自动重复只吞，不重复进入待命
 		this.spaceDown = true;
 		this.scrollEl.addClass('is-pan-ready');
 	};
@@ -302,7 +350,8 @@ export class TextPopupModal extends Modal {
 		activeDocument.addEventListener('pointermove', this.onPointerMove);
 		activeDocument.addEventListener('pointerup', this.onPointerUp);
 		activeDocument.addEventListener('pointercancel', this.onPointerCancel);
-		activeDocument.addEventListener('keydown', this.onKeyDown);
+		// 空格平移必须赶在控制条按钮 / 核心之前拿到事件，所以注册在 capture 阶段（解绑也要带 true）。
+		activeDocument.addEventListener('keydown', this.onKeyDown, true);
 		activeDocument.addEventListener('keyup', this.onKeyUp);
 		activeWindow.addEventListener('blur', this.onWindowBlur);
 
@@ -321,7 +370,8 @@ export class TextPopupModal extends Modal {
 		activeDocument.removeEventListener('pointermove', this.onPointerMove);
 		activeDocument.removeEventListener('pointerup', this.onPointerUp);
 		activeDocument.removeEventListener('pointercancel', this.onPointerCancel);
-		activeDocument.removeEventListener('keydown', this.onKeyDown);
+		// capture 标记必须与 onOpen 里一致，否则这个监听解绑不掉
+		activeDocument.removeEventListener('keydown', this.onKeyDown, true);
 		activeDocument.removeEventListener('keyup', this.onKeyUp);
 		activeWindow.removeEventListener('blur', this.onWindowBlur);
 		// 平移待命的皮肤（is-pan-ready / is-panning）也要清掉，别留在节点上
@@ -511,8 +561,10 @@ export class TextPopupModal extends Modal {
 		buttonEl.setAttribute('aria-label', label);
 		setIcon(buttonEl, icon);
 		buttonEl.addEventListener('click', onClick);
+		// 空格归平移（由 onKeyDown 在 capture 阶段收走），这里只认 Enter；`repeat` 一并忽略 ——
+		// 没有它时按住键的每一次自动重复都是一次完整的 onClick（字号 / 缩放一路变）。
 		buttonEl.addEventListener('keydown', (evt) => {
-			if (evt.key !== 'Enter' && evt.key !== ' ') return;
+			if (evt.key !== 'Enter' || evt.repeat) return;
 			evt.preventDefault();
 			onClick();
 		});
@@ -538,7 +590,7 @@ export class TextPopupModal extends Modal {
 	}
 
 	/**
-	 * Alt+Click：未放大时以点击点为锚放大，已放大时还原到进入前的位置。
+	 * Alt+Click：未放大时以点击点为锚放大、并把它推到画布中心；已放大时还原到进入前的位置。
 	 *
 	 * 点击点坐标用 `getBoundingClientRect()` 现算，而不是自己累加内边距 / `margin: auto` 的偏移：
 	 * `transform-origin: 0 0` 下缩放后的包围盒左上角与缩放前重合，所以 rect 的 left/top 就是
@@ -559,9 +611,13 @@ export class TextPopupModal extends Modal {
 			// 0.58px，实测落到比目标少 2 个设备像素）；同一个目标值晚一步再写会落到 0.23px 以内，
 			// 说明算式本身没有偏差。详见 Report-20260920-155615。所以这里保持最简的写法。
 			this.applyViewZoom(next);
+			// 两项之和：zoomScrollDelta 让点击处**不动**（补偿放大本身），scrollToMove 再把它
+			// 从原位置**推到画布中心**（V116 第二次反馈要的 reveal.js 手感，见 Plan-20260920-161511 §2.2）。
+			// 点击处离文档边缘太近时居中量会被滚动上限夹掉（做不到居中），内容不会丢。
 			const delta = zoomScrollDelta(current, next, point);
-			this.scrollEl.scrollLeft += delta.left;
-			this.scrollEl.scrollTop += delta.top;
+			const shift = scrollToMove({ x: clientX, y: clientY }, viewportCenter(this.scrollEl));
+			this.scrollEl.scrollLeft += delta.left + shift.left;
+			this.scrollEl.scrollTop += delta.top + shift.top;
 			return;
 		}
 
@@ -569,7 +625,8 @@ export class TextPopupModal extends Modal {
 		const back = this.viewZoomReturn;
 		this.viewZoomReturn = null;
 		if (back) {
-			// 从 2× 回到 1× 不需要算补偿：写回进入前的位置即可（浏览器自己会把越界值夹回范围内）
+			// 从 2× 回到 1× 不需要算补偿：写回进入前的位置即可（浏览器自己会把越界值夹回范围内）。
+			// 也是「刚才看到哪儿」优先于「居中到哪儿」。
 			this.scrollEl.scrollLeft = back.left;
 			this.scrollEl.scrollTop = back.top;
 		}
@@ -600,14 +657,6 @@ export class TextPopupModal extends Modal {
 		this.spaceDown = false;
 		this.panOrigin = null;
 		this.scrollEl.removeClass('is-pan-ready', 'is-panning');
-	}
-
-	/**
-	 * 焦点是否在控制条里。控制条的按钮自己绑了 keydown（空格 / 回车 = 激活按钮，
-	 * 见 createControlButton），此时空格不能抢成平移待命。
-	 */
-	private isControlTarget(target: EventTarget | null): boolean {
-		return target instanceof HTMLElement && target.closest('.text-popup-controls') !== null;
 	}
 
 	/** 缩放以倍数作用于字号，因此内容始终自然重排，不会出现被裁切的情况。 */
