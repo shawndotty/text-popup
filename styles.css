@@ -171,6 +171,7 @@
    min(640px, 100%) 让窄窗口退化成「正好占满内容区」，窗口够宽时就是纯 640px 下限；
    :has() 只命中代码块与 Callout，数学块、普通段落、裸引用维持原来的按内容收缩。 */
 .mod-text-popup .text-popup-text.is-rich:has(pre),
+.mod-text-popup .text-popup-text.is-rich:has(blockquote),
 .mod-text-popup .text-popup-text.is-rich:has(.mermaid),
 .mod-text-popup .text-popup-text.is-rich:has(.callout) {
 	min-width: min(640px, 100%);
@@ -181,6 +182,12 @@
 
 .mod-text-popup .text-popup-text.is-rich .callout {
 	padding: 6px 12px;
+}
+
+.mod-text-popup .text-popup-text.is-rich pre, 
+.mod-text-popup .text-popup-text.is-rich blockquote, 
+.mod-text-popup .text-popup-text.is-rich .callout {
+	width: 100%;
 }
 
 /* Mermaid：把图当矢量图整体缩放。
