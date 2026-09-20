@@ -1,5 +1,5 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
-import type { DropdownComponent } from 'obsidian';
+import { PluginSettingTab } from 'obsidian';
+import type { App, SettingDefinitionItem } from 'obsidian';
 import { isBlockLevelTag } from './blocks';
 import { t } from './lang/helpers';
 import type TextPopupPlugin from './main';
@@ -46,6 +46,10 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	singleLineTag: 'p',
 	multiLineTag: 'div',
 };
+
+/** 「跟随主题」时色块控件的备用色（`<input type=color>` 表示不了「没有颜色」）。 */
+export const DEFAULT_BACKGROUND_HEX = '#2b2b2b';
+export const DEFAULT_TEXT_HEX = '#dcddde';
 
 export const FONT_SIZE_MIN = 12;
 export const FONT_SIZE_MAX = 72;
@@ -136,270 +140,360 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 	};
 }
 
+// ——————————————————————————————————————————————————————————————
+// 声明式设置页的读 / 写 / 副作用（纯函数，单测主战场）
+// ——————————————————————————————————————————————————————————————
+
+/**
+ * 设置页的控件键，与 `getSettingDefinitions()` 里的 `control.key` 一一对应（写错即编译报错）。
+ * `popupBackgroundFollowTheme` / `popupTextFollowTheme` 是**虚拟键**：只算给控件用，不落进 `data.json`。
+ */
+export type SettingKey =
+	| 'enabled'
+	| 'renderRichText'
+	| 'blockKinds.code'
+	| 'blockKinds.callout'
+	| 'blockKinds.math'
+	| 'blockKinds.image'
+	| 'blockKinds.quote'
+	| 'popupBackgroundFollowTheme'
+	| 'popupBackgroundColor'
+	| 'popupTextFollowTheme'
+	| 'popupTextColor'
+	| 'popupFontSize'
+	| 'supportedTags'
+	| 'singleLineTag'
+	| 'multiLineTag';
+
+/** 改完某个键之后要跑的副作用 —— 单独一张表，防止「顺手多加一次全文档刷新」。 */
+export type SettingEffect = 'refreshActions' | 'quoteActions' | 'rebuildDefinitions';
+
+const NO_EFFECTS: readonly SettingEffect[] = [];
+
+/**
+ * 副作用表（照抄改造前 `display()` 里 13 个 `onChange` 的行为，不加不减）：
+ * `enabled` 与 5 个 `blockKinds.*` 要立刻同步图标，`quote` 另发一次装饰集信号，
+ * `supportedTags` 还要重建定义（两个下拉的选项要跟着变），其余键只保存。
+ */
+export function settingSideEffects(key: SettingKey): readonly SettingEffect[] {
+	switch (key) {
+		case 'enabled':
+			return ['refreshActions', 'quoteActions'];
+		case 'blockKinds.quote':
+			return ['refreshActions', 'quoteActions'];
+		case 'blockKinds.code':
+		case 'blockKinds.callout':
+		case 'blockKinds.math':
+		case 'blockKinds.image':
+			return ['refreshActions'];
+		case 'supportedTags':
+			return ['refreshActions', 'rebuildDefinitions'];
+		default:
+			return NO_EFFECTS;
+	}
+}
+
+/** 读：给声明式控件播种；两个虚拟键的开关状态在这里算出来。 */
+export function readSettingValue(settings: TextPopupSettings, key: SettingKey): unknown {
+	switch (key) {
+		case 'blockKinds.code':
+			return settings.blockKinds.code;
+		case 'blockKinds.callout':
+			return settings.blockKinds.callout;
+		case 'blockKinds.math':
+			return settings.blockKinds.math;
+		case 'blockKinds.image':
+			return settings.blockKinds.image;
+		case 'blockKinds.quote':
+			return settings.blockKinds.quote;
+		// 空字符串 = 跟随主题；颜色控件表示不了空值，跟随主题时就给备用色
+		case 'popupBackgroundFollowTheme':
+			return settings.popupBackgroundColor === '';
+		case 'popupBackgroundColor':
+			return settings.popupBackgroundColor || DEFAULT_BACKGROUND_HEX;
+		case 'popupTextFollowTheme':
+			return settings.popupTextColor === '';
+		case 'popupTextColor':
+			return settings.popupTextColor || DEFAULT_TEXT_HEX;
+		case 'supportedTags':
+			return settings.supportedTags.join(', ');
+		default:
+			return settings[key];
+	}
+}
+
+/**
+ * 写：归一化 + 落盘前的赋值（含 `blockKinds.*` 的嵌套路径与两个虚拟键）。
+ * 返回**是否真的改动了设置** —— 没改动时调用方跳过保存与副作用，
+ * 这样「同一个值反复提交」（例如在「支持的标签」里敲一个尾随空格）不会白白全文档刷新一次。
+ */
+export function writeSettingValue(
+	settings: TextPopupSettings,
+	key: SettingKey,
+	value: unknown,
+): boolean {
+	switch (key) {
+		case 'enabled':
+			return assign(settings, 'enabled', value === true);
+		case 'renderRichText':
+			return assign(settings, 'renderRichText', value === true);
+		case 'popupFontSize':
+			return assign(settings, 'popupFontSize', clampFontSize(value));
+		case 'multiLineTag':
+			return assign(settings, 'multiLineTag', resolveMultiLineTag(value, settings.supportedTags));
+		case 'singleLineTag':
+			return assign(
+				settings,
+				'singleLineTag',
+				resolveSingleLineTag(value, settings.multiLineTag, settings.supportedTags),
+			);
+		case 'popupBackgroundFollowTheme':
+			return assign(
+				settings,
+				'popupBackgroundColor',
+				value === true ? '' : DEFAULT_BACKGROUND_HEX,
+			);
+		case 'popupBackgroundColor':
+			return assign(settings, 'popupBackgroundColor', readString(value, DEFAULT_BACKGROUND_HEX));
+		case 'popupTextFollowTheme':
+			return assign(settings, 'popupTextColor', value === true ? '' : DEFAULT_TEXT_HEX);
+		case 'popupTextColor':
+			return assign(settings, 'popupTextColor', readString(value, DEFAULT_TEXT_HEX));
+		case 'blockKinds.code':
+			return assignBlockKind(settings, 'code', value);
+		case 'blockKinds.callout':
+			return assignBlockKind(settings, 'callout', value);
+		case 'blockKinds.math':
+			return assignBlockKind(settings, 'math', value);
+		case 'blockKinds.image':
+			return assignBlockKind(settings, 'image', value);
+		case 'blockKinds.quote':
+			return assignBlockKind(settings, 'quote', value);
+		case 'supportedTags':
+			return assignSupportedTags(settings, value);
+	}
+}
+
+/** 只在值真的变化时写入顶层字段。 */
+function assign<K extends keyof TextPopupSettings>(
+	settings: TextPopupSettings,
+	key: K,
+	value: TextPopupSettings[K],
+): boolean {
+	if (settings[key] === value) return false;
+	settings[key] = value;
+	return true;
+}
+
+function assignBlockKind(
+	settings: TextPopupSettings,
+	kind: keyof BlockKindSettings,
+	value: unknown,
+): boolean {
+	const enabled = value === true;
+	if (settings.blockKinds[kind] === enabled) return false;
+	settings.blockKinds[kind] = enabled;
+	return true;
+}
+
+/** 改「支持的标签」要顺手把两个包裹标签拉回合法值，顺序不能颠倒（见 `resolveSingleLineTag`）。 */
+function assignSupportedTags(settings: TextPopupSettings, value: unknown): boolean {
+	const tags = normalizeTagList(value);
+	if (tags.join(',') === settings.supportedTags.join(',')) return false;
+	settings.supportedTags = tags;
+	const multiLineTag = resolveMultiLineTag(settings.multiLineTag, tags);
+	settings.multiLineTag = multiLineTag;
+	settings.singleLineTag = resolveSingleLineTag(settings.singleLineTag, multiLineTag, tags);
+	return true;
+}
+
+/**
+ * 包裹标签下拉的选项：只取「支持的标签」里的块级标签（行内标签生成的块不会有放大图标），
+ * 但**当前值一定留在选项里** —— `DropdownComponent.setValue()` 只是 `selectEl.value = v`，
+ * 值不在 `<option>` 里时下拉框会显示成空白（例如把 `div` 从支持列表里删掉之后）。
+ */
+export function tagDropdownOptions(
+	settings: TextPopupSettings,
+	key: 'singleLineTag' | 'multiLineTag',
+): Record<string, string> {
+	const tags = new Set([...settings.supportedTags.filter(isBlockLevelTag), settings[key]]);
+	const options: Record<string, string> = {};
+	for (const tag of tags) options[tag] = tag;
+	return options;
+}
+
+/**
+ * 设置页 —— 声明式定义（Obsidian 1.13 的 `getSettingDefinitions()`）。
+ *
+ * 取值 / 存值都走 `readSettingValue` / `writeSettingValue`，副作用只有 `settingSideEffects` 一张表；
+ * 因此 `display()` 与手写的 DOM 同步全部不需要了（`minAppVersion` 也已提到 1.13.0）。
+ */
 export class TextPopupSettingTab extends PluginSettingTab {
 	private plugin: TextPopupPlugin;
-	/** 两个包裹标签下拉框；「支持的标签」改动把它们挤掉时用它同步显示，不整页重绘。 */
-	private tagDropdowns: Array<{ dropdown: DropdownComponent; key: 'singleLineTag' | 'multiLineTag' }> =
-		[];
 
 	constructor(app: App, plugin: TextPopupPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-		// 整页重绘会丢弃旧的下拉框节点，引用一并清空
-		this.tagDropdowns = [];
-
-		new Setting(containerEl)
-			.setName(t('Enable magnifier icon'))
-			.setDesc(t('Show a magnifier icon for supported blocks in Live Preview.'))
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
-					this.plugin.settings.enabled = value;
-					await this.plugin.saveSettings();
-					refreshTextPopupActions(this.plugin);
-					// 引用块的图标不归 refreshTextPopupActions 管（装饰集），要单独发一次刷新信号
-					notifyQuoteActionsChanged(this.plugin);
-				}),
-			);
-
-		this.addBlockKindSetting(
-			containerEl,
-			'code',
-			t('Magnify code blocks'),
-			t('Show a magnifier icon for fenced code blocks in Live Preview.'),
-		);
-		this.addBlockKindSetting(
-			containerEl,
-			'callout',
-			t('Magnify callouts'),
-			t('Show a magnifier icon for callouts in Live Preview.'),
-		);
-		this.addBlockKindSetting(
-			containerEl,
-			'math',
-			t('Magnify math blocks'),
-			t('Show a magnifier icon for $$ math blocks in Live Preview.'),
-		);
-		this.addBlockKindSetting(
-			containerEl,
-			'image',
-			t('Magnify images'),
-			t('Show a magnifier icon for images in Live Preview.'),
-		);
-		this.addBlockKindSetting(
-			containerEl,
-			'quote',
-			t('Magnify quotes'),
-			t('Show a magnifier icon for blockquotes in Live Preview.'),
-		);
-
-		new Setting(containerEl)
-			.setName(t('Render HTML and Markdown'))
-			.setDesc(
-				t(
-					"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
-				),
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.renderRichText).onChange(async (value) => {
-					this.plugin.settings.renderRichText = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		this.addColorSetting(
-			containerEl,
-			t('Popup background color'),
-			t('Leave empty to follow the theme background color.'),
-			'popupBackgroundColor',
-			'#2b2b2b',
-		);
-
-		this.addColorSetting(
-			containerEl,
-			t('Popup text color'),
-			t('Leave empty to follow the theme text color.'),
-			'popupTextColor',
-			'#dcddde',
-		);
-
-		new Setting(containerEl)
-			.setName(t('Popup font size'))
-			.setDesc(
-				t(
-					'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
-				),
-			)
-			.addSlider((slider) =>
-				slider
-					.setLimits(FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_STEP)
-					.setValue(this.plugin.settings.popupFontSize)
-					.setDynamicTooltip()
-					.onChange(async (value) => {
-						this.plugin.settings.popupFontSize = clampFontSize(value);
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName(t('Supported tags'))
-			.setDesc(
-				t(
-					'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
-				),
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_TAGS.join(', '))
-					.setValue(this.plugin.settings.supportedTags.join(', '))
-					.onChange(async (value) => {
-						const tags = normalizeTagList(value);
-						if (tags.join(',') === this.plugin.settings.supportedTags.join(',')) return;
-						this.plugin.settings.supportedTags = tags;
-						// 列表改小可能把当前包裹标签挤掉，顺手回落到下一个合法标签。
-						// 顺序不能颠倒：单行的兜底链依赖多行先落定。
-						// 不整页重绘：那会让正在输入的这个文本框失焦。
-						const multiLineTag = resolveMultiLineTag(this.plugin.settings.multiLineTag, tags);
-						const singleLineTag = resolveSingleLineTag(
-							this.plugin.settings.singleLineTag,
-							multiLineTag,
-							tags,
-						);
-						this.plugin.settings.multiLineTag = multiLineTag;
-						this.plugin.settings.singleLineTag = singleLineTag;
-						this.syncTagDropdowns();
-						await this.plugin.saveSettings();
-						refreshTextPopupActions(this.plugin);
-					}),
-			);
-
-		this.addTagSetting(
-			containerEl,
-			'singleLineTag',
-			t('Single-line wrapper tag'),
-			t(
-				'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.',
-			),
-		);
-		this.addTagSetting(
-			containerEl,
-			'multiLineTag',
-			t('Multi-line wrapper tag'),
-			t(
-				'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.',
-			),
-		);
+	getControlValue(key: string): unknown {
+		return readSettingValue(this.plugin.settings, key as SettingKey);
 	}
 
-	/** 把设置里的两个包裹标签推回下拉框（「支持的标签」改动后调用）。 */
-	private syncTagDropdowns(): void {
-		for (const { dropdown, key } of this.tagDropdowns) {
-			dropdown.setValue(this.plugin.settings[key]);
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		const settingKey = key as SettingKey;
+		// 值没变就不必保存、更不必刷新图标或重建定义
+		if (!writeSettingValue(this.plugin.settings, settingKey, value)) return;
+
+		await this.plugin.saveSettings();
+		for (const effect of settingSideEffects(settingKey)) {
+			if (effect === 'refreshActions') refreshTextPopupActions(this.plugin);
+			// 引用块的图标不归 refreshTextPopupActions 管（装饰集），要单独发一次刷新信号
+			else if (effect === 'quoteActions') notifyQuoteActionsChanged(this.plugin);
+			// 重跑 getSettingDefinitions：两个包裹标签下拉的选项跟着「支持的标签」变（焦点不受影响）
+			else this.update();
 		}
 	}
 
-	/**
-	 * 包裹标签：`Popup Selected Text` 生成块时用的外层标签（单行 / 多行各一个）。
-	 * 选项只取「支持的标签」里的块级标签 —— 行内标签（`span` 等）生成的块不会有放大图标。
-	 */
-	private addTagSetting(
-		containerEl: HTMLElement,
-		key: 'singleLineTag' | 'multiLineTag',
-		name: string,
-		desc: string,
-	): void {
-		const setting = new Setting(containerEl).setName(name).setDesc(desc);
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const settings = this.plugin.settings;
+		// 总开关关掉时把 5 个分类开关置灰（比藏起来好：设置搜索仍能找到，也能看出它们为什么点不动）
+		const blockKindDisabled = (): boolean => !settings.enabled;
+		// 「跟随主题」时色块行不显示；框架在每次改动后会重算 visible，所以不必手动重绘
+		const backgroundFilled = (): boolean => settings.popupBackgroundColor !== '';
+		const textFilled = (): boolean => settings.popupTextColor !== '';
 
-		setting.addDropdown((dropdown) => {
-			// 当前值一定留在选项里：否则 supportedTags 被改空后下拉框会显示成空白
-			const tags = new Set([
-				...this.plugin.settings.supportedTags.filter(isBlockLevelTag),
-				this.plugin.settings[key],
-			]);
-			for (const tag of tags) dropdown.addOption(tag, tag);
-			dropdown.setValue(this.plugin.settings[key]).onChange(async (value) => {
-				if (key === 'multiLineTag') {
-					this.plugin.settings.multiLineTag = resolveMultiLineTag(
-						value,
-						this.plugin.settings.supportedTags,
-					);
-				} else {
-					this.plugin.settings.singleLineTag = resolveSingleLineTag(
-						value,
-						this.plugin.settings.multiLineTag,
-						this.plugin.settings.supportedTags,
-					);
-				}
-				await this.plugin.saveSettings();
-			});
-			this.tagDropdowns.push({ dropdown, key });
-		});
-	}
-
-	/**
-	 * 五类原生区块的开关：改完立即同步图标（关掉时才能立刻摘掉已注入的按钮）。
-	 *
-	 * 引用块不在 `refreshTextPopupActions` 的覆盖范围里（它的图标由 CM6 装饰器托管），
-	 * 只有它的开关需要额外发一次刷新信号；别的类别不必为此重建装饰集。
-	 */
-	private addBlockKindSetting(
-		containerEl: HTMLElement,
-		key: keyof BlockKindSettings,
-		name: string,
-		desc: string,
-	): void {
-		new Setting(containerEl)
-			.setName(name)
-			.setDesc(desc)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.blockKinds[key]).onChange(async (value) => {
-					this.plugin.settings.blockKinds[key] = value;
-					await this.plugin.saveSettings();
-					refreshTextPopupActions(this.plugin);
-					if (key === 'quote') notifyQuoteActionsChanged(this.plugin);
-				}),
-			);
-	}
-
-	/** 颜色设置：颜色选择器 + 「跟随主题」按钮（把值置空即回落到主题色）。 */
-	private addColorSetting(
-		containerEl: HTMLElement,
-		name: string,
-		desc: string,
-		key: 'popupBackgroundColor' | 'popupTextColor',
-		fallbackHex: string,
-	): void {
-		let statusEl: HTMLElement | null = null;
-
-		const describe = (value: string): string => (value ? value : t('Follow theme'));
-		const render = (value: string): void => {
-			if (statusEl) statusEl.setText(describe(value));
-		};
-
-		const setting = new Setting(containerEl).setName(name).setDesc(desc);
-
-		setting.addColorPicker((picker) => {
-			picker.setValue(this.plugin.settings[key] || fallbackHex);
-			picker.onChange(async (value) => {
-				this.plugin.settings[key] = value;
-				await this.plugin.saveSettings();
-				render(value);
-			});
-		});
-
-		setting.addButton((button) =>
-			button.setButtonText(t('Follow theme')).onClick(async () => {
-				this.plugin.settings[key] = '';
-				await this.plugin.saveSettings();
-				render('');
-			}),
-		);
-
-		statusEl = setting.controlEl.createSpan({ cls: 'text-popup-setting-status' });
-		render(this.plugin.settings[key]);
+		return [
+			{
+				type: 'group',
+				heading: t('Magnifier icon'),
+				items: [
+					{
+						name: t('Enable magnifier icon'),
+						desc: t('Show a magnifier icon for supported blocks in Live Preview.'),
+						control: { type: 'toggle', key: 'enabled' },
+					},
+					{
+						name: t('Magnify code blocks'),
+						desc: t('Show a magnifier icon for fenced code blocks in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.code', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify callouts'),
+						desc: t('Show a magnifier icon for callouts in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.callout', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify math blocks'),
+						desc: t('Show a magnifier icon for $$ math blocks in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.math', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify images'),
+						desc: t('Show a magnifier icon for images in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.image', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify quotes'),
+						desc: t('Show a magnifier icon for blockquotes in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.quote', disabled: blockKindDisabled },
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: t('Popup content'),
+				items: [
+					{
+						name: t('Render HTML and Markdown'),
+						desc: t(
+							"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
+						),
+						control: { type: 'toggle', key: 'renderRichText' },
+					},
+					{
+						name: t('Follow the theme background'),
+						control: { type: 'toggle', key: 'popupBackgroundFollowTheme' },
+					},
+					{
+						name: t('Popup background color'),
+						desc: t('Color of the popup window.'),
+						visible: backgroundFilled,
+						control: {
+							type: 'color',
+							key: 'popupBackgroundColor',
+							defaultValue: DEFAULT_BACKGROUND_HEX,
+						},
+					},
+					{
+						name: t('Follow the theme text color'),
+						control: { type: 'toggle', key: 'popupTextFollowTheme' },
+					},
+					{
+						name: t('Popup text color'),
+						desc: t('Text color inside the popup body.'),
+						visible: textFilled,
+						control: {
+							type: 'color',
+							key: 'popupTextColor',
+							defaultValue: DEFAULT_TEXT_HEX,
+						},
+					},
+					{
+						name: t('Popup font size'),
+						desc: t(
+							'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+						),
+						control: {
+							type: 'slider',
+							key: 'popupFontSize',
+							min: FONT_SIZE_MIN,
+							max: FONT_SIZE_MAX,
+							step: FONT_SIZE_STEP,
+							defaultValue: DEFAULT_SETTINGS.popupFontSize,
+						},
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: t('Block wrappers'),
+				items: [
+					{
+						name: t('Supported tags'),
+						desc: t(
+							'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
+						),
+						control: {
+							type: 'text',
+							key: 'supportedTags',
+							placeholder: DEFAULT_TAGS.join(', '),
+						},
+					},
+					{
+						name: t('Single-line wrapper tag'),
+						desc: t(
+							'Which block-level tag the conversion commands use when the selection is a single line. Only block-level tags can produce a magnifiable block.',
+						),
+						control: {
+							type: 'dropdown',
+							key: 'singleLineTag',
+							options: tagDropdownOptions(settings, 'singleLineTag'),
+						},
+					},
+					{
+						name: t('Multi-line wrapper tag'),
+						desc: t(
+							'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.',
+						),
+						control: {
+							type: 'dropdown',
+							key: 'multiLineTag',
+							options: tagDropdownOptions(settings, 'multiLineTag'),
+						},
+					},
+				],
+			},
+		];
 	}
 }

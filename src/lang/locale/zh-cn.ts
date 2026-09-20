@@ -6,6 +6,7 @@ import type en from './en';
  */
 const zhCN: Partial<typeof en> = {
 	// —— 设置页 ——
+	'Magnifier icon': '放大图标',
 	'Enable magnifier icon': '启用放大图标',
 	'Show a magnifier icon for supported blocks in Live Preview.':
 		'在实时预览中，为支持的区块显示放大图标。',
@@ -24,16 +25,20 @@ const zhCN: Partial<typeof en> = {
 	'Magnify quotes': '放大引用块',
 	'Show a magnifier icon for blockquotes in Live Preview.':
 		'为实时预览里的引用块显示放大图标。',
+	'Popup content': '弹窗内容',
 	'Render HTML and Markdown': '渲染 HTML 与 Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		'在弹窗内按语法渲染块里的 HTML 与 Markdown。关闭后按纯文本原样显示。',
+	'Follow the theme background': '跟随主题背景色',
 	'Popup background color': '弹窗背景色',
-	'Leave empty to follow the theme background color.': '留空则跟随主题背景色。',
+	'Color of the popup window.': '弹窗窗口的背景颜色。',
+	'Follow the theme text color': '跟随主题文字颜色',
 	'Popup text color': '弹窗文字颜色',
-	'Leave empty to follow the theme text color.': '留空则跟随主题文字颜色。',
+	'Text color inside the popup body.': '弹窗正文的文字颜色。',
 	'Popup font size': '弹窗字号',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'弹窗内文字的默认字号，单位为像素。弹窗内还可以临时调整。',
+	'Block wrappers': '区块包裹',
 	'Supported tags': '支持的标签',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
 		'只对手写的块级 HTML 生效，用逗号分隔，例如 div, p。修改后立即生效，不需要改代码。',
@@ -43,7 +48,6 @@ const zhCN: Partial<typeof en> = {
 	'Multi-line wrapper tag': '多行文本包裹标签',
 	'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.':
 		'选区含换行（多行）时，转换命令用哪个块级标签包裹文本；只有块级标签能生成可放大的块。',
-	'Follow theme': '跟随主题',
 
 	// —— 命令名 · 右键菜单项 ——
 	'Popup selected text': 'Popup选中文本',

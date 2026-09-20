@@ -1,5 +1,5 @@
 /**
- * `settings.ts` 的行为用例 —— 磁盘数据 → 完整设置的归一化。
+ * `settings.ts` 的行为用例 —— 磁盘数据 → 完整设置的归一化，以及声明式设置页的读 / 写 / 副作用。
  *
  * 这里守的是「老 `data.json` 不需要迁移脚本」这条承诺：任何字段缺失 / 类型不对 / 越界，
  * 都必须回落成一份能直接用的完整设置，而不是让插件带着 `undefined` 跑起来。
@@ -8,6 +8,8 @@
  * 且**传递依赖** `scanner.ts` → `modal.ts`（因此桩必须覆盖那两处用到的符号，见 tests/stubs/）。
  *
  * 刻意没测：`TextPopupSettingTab` 的 DOM 渲染与交互（需要真实 DOM 与 Obsidian 设置页容器）。
+ * 声明式设置页的「读 / 写 / 副作用」本轮做成了 `settings.ts` 里的纯函数，因此在这里直接钉住
+ * （`getSettingDefinitions()` 本身不测 —— 它是这些纯函数的组装，跑真机验证）。
  */
 
 import assert from 'node:assert/strict';
@@ -18,8 +20,20 @@ const jiti = createJiti(import.meta.url, {
 	moduleCache: false,
 	alias: { obsidian: new URL('./stubs/obsidian.mjs', import.meta.url).pathname },
 });
-const { DEFAULT_SETTINGS, FONT_SIZE_MAX, FONT_SIZE_MIN, normalizeSettings, resolveMultiLineTag, resolveSingleLineTag } =
-	await jiti.import('../src/settings.ts');
+const {
+	DEFAULT_BACKGROUND_HEX,
+	DEFAULT_SETTINGS,
+	DEFAULT_TEXT_HEX,
+	FONT_SIZE_MAX,
+	FONT_SIZE_MIN,
+	normalizeSettings,
+	readSettingValue,
+	resolveMultiLineTag,
+	resolveSingleLineTag,
+	settingSideEffects,
+	tagDropdownOptions,
+	writeSettingValue,
+} = await jiti.import('../src/settings.ts');
 
 // —— 默认值与老数据 ——
 
@@ -222,4 +236,166 @@ test('支持标签串被规范化后再用于包裹标签回落', () => {
 test('支持标签列表非法时回落默认标签', () => {
 	assert.deepEqual(normalizeSettings({ supportedTags: 42 }).supportedTags, ['div', 'p'], '非字符串');
 	assert.deepEqual(normalizeSettings({ supportedTags: ['!!!'] }).supportedTags, ['div', 'p'], '全非法项');
+});
+
+// ——————————————————————————————————————————————————————————————
+// 声明式设置页：读 / 写 / 副作用
+// ——————————————————————————————————————————————————————————————
+
+test('读：blockKinds 走嵌套路径，顶层键直接读', () => {
+	const settings = normalizeSettings({ blockKinds: { quote: false } });
+	assert.equal(readSettingValue(settings, 'blockKinds.quote'), false, '嵌套键');
+	assert.equal(readSettingValue(settings, 'blockKinds.code'), true, '同层其它键');
+	assert.equal(readSettingValue(settings, 'enabled'), true, '顶层键');
+	assert.equal(readSettingValue(settings, 'renderRichText'), true, '顶层键');
+});
+
+test('读：支持的标签拼成逗号 + 空格的字符串（与改造前的 join 一致）', () => {
+	assert.equal(readSettingValue(normalizeSettings(undefined), 'supportedTags'), 'div, p');
+	assert.equal(
+		readSettingValue(normalizeSettings({ supportedTags: 'div,p,section' }), 'supportedTags'),
+		'div, p, section',
+	);
+});
+
+test('读：「跟随主题」虚拟键由颜色是否为空串算出来', () => {
+	assert.equal(readSettingValue(normalizeSettings(undefined), 'popupBackgroundFollowTheme'), true, '空串 = 跟随');
+	assert.equal(
+		readSettingValue(normalizeSettings({ popupBackgroundColor: '#123456' }), 'popupBackgroundFollowTheme'),
+		false,
+	);
+	assert.equal(readSettingValue(normalizeSettings(undefined), 'popupTextFollowTheme'), true);
+	assert.equal(
+		readSettingValue(normalizeSettings({ popupTextColor: '#123456' }), 'popupTextFollowTheme'),
+		false,
+	);
+});
+
+test('读：跟随主题时色块控件拿到备用色（空串在 <input type=color> 上会显示成黑色）', () => {
+	assert.equal(readSettingValue(normalizeSettings(undefined), 'popupBackgroundColor'), DEFAULT_BACKGROUND_HEX);
+	assert.equal(readSettingValue(normalizeSettings(undefined), 'popupTextColor'), DEFAULT_TEXT_HEX);
+	assert.equal(
+		readSettingValue(normalizeSettings({ popupBackgroundColor: '#123456' }), 'popupBackgroundColor'),
+		'#123456',
+		'有值时原样返回',
+	);
+});
+
+test('写：blockKinds 只动对应键，不重建整个对象，返回是否改动', () => {
+	const settings = normalizeSettings(undefined);
+	const blockKinds = settings.blockKinds;
+	assert.equal(writeSettingValue(settings, 'blockKinds.quote', false), true, '有改动');
+	assert.equal(settings.blockKinds, blockKinds, '对象引用不变');
+	assert.equal(blockKinds.quote, false);
+	assert.equal(blockKinds.code, true, '其它键不受影响');
+	assert.equal(writeSettingValue(settings, 'blockKinds.quote', false), false, '同一个值再写一次不算改动');
+});
+
+test('写：「跟随主题」虚拟键两个方向都落到颜色字段上', () => {
+	const settings = normalizeSettings({ popupBackgroundColor: '#123456' });
+	assert.equal(writeSettingValue(settings, 'popupBackgroundFollowTheme', true), true);
+	assert.equal(settings.popupBackgroundColor, '', '跟随主题 = 空串（与旧「跟随主题」按钮一致）');
+	assert.equal(writeSettingValue(settings, 'popupBackgroundFollowTheme', false), true);
+	assert.equal(settings.popupBackgroundColor, DEFAULT_BACKGROUND_HEX, '关掉开关给一个默认深色');
+});
+
+test('写：文字颜色的虚拟键同理，两个颜色互不影响', () => {
+	const settings = normalizeSettings({ popupTextColor: '#abcdef' });
+	assert.equal(writeSettingValue(settings, 'popupTextFollowTheme', true), true);
+	assert.equal(settings.popupTextColor, '');
+	assert.equal(settings.popupBackgroundColor, '', '背景色不受影响');
+	assert.equal(readSettingValue(settings, 'popupTextColor'), DEFAULT_TEXT_HEX);
+});
+
+test('写：字号经 clampFontSize 落在 [12, 72]，非数字回落默认 16', () => {
+	const settings = normalizeSettings(undefined);
+	assert.equal(writeSettingValue(settings, 'popupFontSize', 999), true);
+	assert.equal(settings.popupFontSize, FONT_SIZE_MAX, '过大');
+	assert.equal(writeSettingValue(settings, 'popupFontSize', 5), true);
+	assert.equal(settings.popupFontSize, FONT_SIZE_MIN, '过小');
+	assert.equal(writeSettingValue(settings, 'popupFontSize', 20.6), true);
+	assert.equal(settings.popupFontSize, 21, '四舍五入');
+	assert.equal(writeSettingValue(settings, 'popupFontSize', 'x'), true);
+	assert.equal(settings.popupFontSize, 16, '非数字回落默认');
+});
+
+test('写：支持标签脏输入先经 normalizeTagList 归一化', () => {
+	const settings = normalizeSettings(undefined);
+	assert.equal(writeSettingValue(settings, 'supportedTags', ' <DIV>，P、span span '), true);
+	assert.deepEqual(settings.supportedTags, ['div', 'p', 'span'], '去符号、小写、去重');
+});
+
+test('写：归一化后没变化就返回 false（不保存、不刷新）', () => {
+	const settings = normalizeSettings(undefined);
+	assert.equal(writeSettingValue(settings, 'supportedTags', 'div, p '), false);
+	assert.equal(writeSettingValue(settings, 'enabled', true), false);
+	assert.equal(writeSettingValue(settings, 'popupFontSize', settings.popupFontSize), false);
+});
+
+test('写：支持标签改小时，两个包裹标签按回落链重新落定', () => {
+	const settings = normalizeSettings({ supportedTags: 'div, p', multiLineTag: 'div', singleLineTag: 'p' });
+	assert.equal(writeSettingValue(settings, 'supportedTags', 'section'), true);
+	assert.deepEqual(settings.supportedTags, ['section']);
+	assert.equal(settings.multiLineTag, 'section', 'div 被删 → 取列表里第一个块级标签');
+	assert.equal(settings.singleLineTag, 'section', 'p 被删 → 回落到多行标签');
+});
+
+test('写：支持标签只是加项时，两个包裹标签原样保留', () => {
+	const settings = normalizeSettings({ supportedTags: 'div, p', multiLineTag: 'div', singleLineTag: 'p' });
+	assert.equal(writeSettingValue(settings, 'supportedTags', 'div, p, iframe'), true);
+	assert.equal(settings.multiLineTag, 'div');
+	assert.equal(settings.singleLineTag, 'p');
+});
+
+test('写：包裹标签经同一套判据回落（行内标签 / 不在列表里都不采纳）', () => {
+	const settings = normalizeSettings({ multiLineTag: 'p' });
+	assert.equal(writeSettingValue(settings, 'multiLineTag', 'span'), true);
+	assert.equal(settings.multiLineTag, 'div', 'span 是行内标签 → 取列表里第一个块级标签');
+	assert.equal(writeSettingValue(settings, 'singleLineTag', 'section'), false, 'section 不在列表 → 回落默认 p');
+	assert.equal(settings.singleLineTag, 'p');
+});
+
+test('副作用表：只有开关与「支持的标签」会触发刷新', () => {
+	assert.deepEqual([...settingSideEffects('enabled')], ['refreshActions', 'quoteActions']);
+	assert.deepEqual([...settingSideEffects('blockKinds.code')], ['refreshActions'], '代码块不重建装饰集');
+	assert.ok(settingSideEffects('blockKinds.quote').includes('quoteActions'), '引用块要额外发一次信号');
+	assert.ok(!settingSideEffects('blockKinds.code').includes('quoteActions'));
+	assert.deepEqual(
+		[...settingSideEffects('supportedTags')],
+		['refreshActions', 'rebuildDefinitions'],
+		'标签改动要重建定义，两个下拉的选项才跟着变',
+	);
+	for (const kind of ['callout', 'math', 'image']) {
+		assert.deepEqual([...settingSideEffects(`blockKinds.${kind}`)], ['refreshActions'], kind);
+	}
+});
+
+test('副作用表：改字号 / 颜色 / 包裹标签 / 富文本开关都不刷新文档', () => {
+	// 防「顺手多做一次全文档查询」—— README 的实现要点里记着这条路径的自激教训
+	const silent = [
+		'renderRichText',
+		'popupFontSize',
+		'popupBackgroundFollowTheme',
+		'popupBackgroundColor',
+		'popupTextFollowTheme',
+		'popupTextColor',
+		'singleLineTag',
+		'multiLineTag',
+	];
+	for (const key of silent) {
+		assert.deepEqual([...settingSideEffects(key)], [], key);
+	}
+});
+
+test('包裹标签下拉的选项只取块级标签，行内标签被挡掉', () => {
+	const settings = normalizeSettings({ supportedTags: 'div, p, span' });
+	assert.deepEqual(Object.keys(tagDropdownOptions(settings, 'singleLineTag')), ['div', 'p']);
+	assert.deepEqual(Object.keys(tagDropdownOptions(settings, 'multiLineTag')), ['div', 'p']);
+});
+
+test('包裹标签下拉永远包含当前值 —— 否则 <select> 会显示成空白', () => {
+	// normalizeSettings 会把非法值拉回合法值，这里手工造出「当前值不在支持列表里」的形态
+	const settings = normalizeSettings({ supportedTags: 'p, span' });
+	settings.multiLineTag = 'section';
+	assert.deepEqual(Object.keys(tagDropdownOptions(settings, 'multiLineTag')), ['p', 'section']);
 });

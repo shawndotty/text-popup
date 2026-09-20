@@ -7,6 +7,7 @@
  */
 export default {
 	// —— 设置页 ——
+	'Magnifier icon': 'Magnifier icon',
 	'Enable magnifier icon': 'Enable magnifier icon',
 	'Show a magnifier icon for supported blocks in Live Preview.':
 		'Show a magnifier icon for supported blocks in Live Preview.',
@@ -25,17 +26,20 @@ export default {
 	'Magnify quotes': 'Magnify quotes',
 	'Show a magnifier icon for blockquotes in Live Preview.':
 		'Show a magnifier icon for blockquotes in Live Preview.',
+	'Popup content': 'Popup content',
 	'Render HTML and Markdown': 'Render HTML and Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
+	'Follow the theme background': 'Follow the theme background',
 	'Popup background color': 'Popup background color',
-	'Leave empty to follow the theme background color.':
-		'Leave empty to follow the theme background color.',
+	'Color of the popup window.': 'Color of the popup window.',
+	'Follow the theme text color': 'Follow the theme text color',
 	'Popup text color': 'Popup text color',
-	'Leave empty to follow the theme text color.': 'Leave empty to follow the theme text color.',
+	'Text color inside the popup body.': 'Text color inside the popup body.',
 	'Popup font size': 'Popup font size',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+	'Block wrappers': 'Block wrappers',
 	'Supported tags': 'Supported tags',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
 		'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.',
@@ -45,7 +49,6 @@ export default {
 	'Multi-line wrapper tag': 'Multi-line wrapper tag',
 	'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.':
 		'Which block-level tag the conversion commands use when the selection has line breaks. Only block-level tags can produce a magnifiable block.',
-	'Follow theme': 'Follow theme',
 
 	// —— 命令名 · 右键菜单项 ——
 	'Popup selected text': 'Popup selected text',
