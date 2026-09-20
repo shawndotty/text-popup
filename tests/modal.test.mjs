@@ -45,6 +45,7 @@ const jiti = createJiti(import.meta.url, {
 	alias: { obsidian: new URL('./stubs/obsidian.mjs', import.meta.url).pathname },
 });
 const {
+	clampScroll,
 	clickZoomTarget,
 	easeOutCubic,
 	elementPoint,
@@ -326,7 +327,7 @@ const NO_PAN = { left: 0, top: 0 };
 test('resolveViewFrame：没被夹时滚动全担，收尾必须是干净的 transform', () => {
 	const desired = { left: 875, top: 519 };
 	for (const progress of [0, 0.5, 1]) {
-		const frame = resolveViewFrame(desired, desired, NO_PAN, progress, true);
+		const frame = resolveViewFrame(desired, desired, NO_PAN, progress);
 		assert.deepEqual(frame.scroll, desired, `progress=${progress} 时滚动量应当原样写下去`);
 		assert.deepEqual(frame.pan, NO_PAN, `progress=${progress} 时不该有平移：没被夹就不该动内容`);
 	}
@@ -337,7 +338,7 @@ test('resolveViewFrame：被夹掉时滚动写 0、整段交给平移（平移�
 	// 平移补一部分」解不出来，滚动必须写 0（0 永远合法、不会再被夹）。
 	const desired = { left: 300, top: 0 };
 	const accepted = { left: 0, top: 0 };
-	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, true);
+	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5);
 	assert.deepEqual(frame.scroll, NO_PAN, '放不下时滚动归 0，不能留在被夹后的那个值上');
 	assert.equal(frame.pan.left, -300, '差额必须由平移顶上（负值 = 让 transform 再往左推 300px）');
 	// 屏幕落位 = 原点 − 滚动 + 平移，两种分支下都必须等于 原点 − 目标
@@ -348,7 +349,7 @@ test('resolveViewFrame：被夹掉时滚动写 0、整段交给平移（平移�
 test('resolveViewFrame：上一段过渡的残留按进度收回，最后一帧必须归零', () => {
 	// 入参是**缓动后**的进度（与 scale / 滚动同一条曲线，调用方传 easeOutCubic 的结果）
 	const carry = { left: -164, top: -20 };
-	const fits = (eased) => resolveViewFrame(NO_PAN, NO_PAN, carry, eased, true).pan;
+	const fits = (eased) => resolveViewFrame(NO_PAN, NO_PAN, carry, eased).pan;
 	assert.equal(fits(0).left, -164, '进度 0 时残留在原位 —— 打断那一刻画面不能动');
 	assert.equal(fits(0.5).left, -82, '中途按同一进度收回');
 	// 用 `=== 0` 而不是 assert.equal：`-164 * 0` 是 -0，写进 CSS 就是 `0px`，语义上等价
@@ -360,23 +361,76 @@ test('resolveViewFrame：读数只差零点几像素（设备像素对齐）时�
 	// 真机实测：DPR 1.728 时滚动位置按设备像素对齐，1 设备像素 ≈ 0.58px，读回来常比目标小一点
 	const desired = { left: 479.75, top: 0 };
 	const accepted = { left: 479.17199999999997, top: 0 };
-	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, true);
+	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5);
 	assert.deepEqual(frame.scroll, desired, '差不到 1px 应当照旧走「滚动全担」，否则滚动量会无谓地在 0 与目标间跳');
 	assert.deepEqual(frame.pan, NO_PAN, '这种量级不该动用平移');
 });
 
-test('resolveViewFrame：放大到 2× 那条路不补偿，滚动照旧交给浏览器夹', () => {
-	// 终点是「把点击处居中」这条**算出来的**目标，内容比画布窄时它本来就不在可达范围内，
-	// 那里的夹取是应有行为（Report-20260920-184458 §3.4），补偿收不回来、只会留下永久位移。
-	const desired = { left: 1257, top: 0 };
-	const accepted = { left: 875, top: 0 };
-	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, false);
-	assert.deepEqual(frame.scroll, desired, '不补偿时照旧写目标值，让浏览器去夹');
-	assert.deepEqual(frame.pan, NO_PAN, '不补偿时不该有平移');
+test('clampScroll：目标夹进可达范围，够得着的不动、下限是 0', () => {
+	// 真机实测（Report-20260920-223435 §3）：内容块 1077 宽、画布 1481，点击落在画布左侧时
+	// 算出来的横向目标是 1191，而 2× 的上限只有 875。
 	assert.deepEqual(
-		resolveViewFrame(desired, accepted, { left: -164, top: 0 }, 0.5, false).pan,
-		{ left: -82, top: 0 },
-		'但被打断时留下的残留仍要收回，否则会瞬间跳一下',
+		clampScroll({ left: 1191, top: 103 }, { left: 875, top: 10798 }),
+		{ left: 875, top: 103 },
+		'超上限的轴夹到上限，没超的原样保留',
+	);
+	assert.deepEqual(clampScroll({ left: -40, top: 0 }, { left: 875, top: 0 }), { left: 0, top: 0 }, '负值夹到 0');
+	// 横向在 1× 时根本滚不动（上限 0）：这一轴的目标只能是 0，内容不该横向平移
+	assert.deepEqual(clampScroll({ left: 538, top: 12 }, { left: 0, top: 0 }), { left: 0, top: 0 }, '上限为 0 时两轴都归 0');
+});
+
+test('Zoom in：滚动被夹住时平移接手，内容不再先朝反方向漂出去', () => {
+	// 与真机同一组几何（Report-20260920-223435 §3）：内容块 1077.07 宽、居中在 1481.48 的画布里。
+	// 横向可滚区间 = 内容块超出可视区的那部分，要放大到 scale≈1.19 才从 0 冒出来 —— 前几帧的滚动
+	// 于是被钉在 0，而 scale 一涨、锚点就朝反方向漂出去（真机实测 155px），再被追回来。
+	const originX = 202.21;
+	const extentX = 1077.07;
+	const viewport = 1481.48;
+	const limit = (scale) => Math.max(0, originX + extentX * scale - viewport);
+	/** 点击处（点击点在 `.text-popup-text` 内的横坐标）在屏幕上的位置。 */
+	const clickLocalX = 864.79;
+	const pointX = (frame, scale) => originX - frame.scroll.left + frame.pan.left + scale * clickLocalX;
+	// 目标来自 zoomScrollDelta + scrollToMove：锚住点击处（+864.79），再把它推到画布中心（再 +326.5）
+	const ideal = { left: 864.79 + 326.5, top: 0 };
+	const tween = {
+		fromScale: 1,
+		toScale: 2,
+		fromScroll: { left: 0, top: 0 },
+		toScroll: clampScroll(ideal, { left: limit(2), top: Infinity }),
+	};
+	assert.equal(tween.toScroll.left, limit(2), '这组几何下目标本身就够不着，必须夹到上限');
+
+	const plain = [];
+	const compensated = [];
+	for (let i = 0; i <= 10; i++) {
+		const progress = i / 10;
+		const { scale, scroll } = zoomTweenFrame(tween, progress);
+		// 真机实测：写进去的滚动量会被同步夹进 [0, limit(scale)]，读回来就是这个值
+		const accepted = { left: Math.min(scroll.left, limit(scale)), top: 0 };
+		plain.push(pointX({ scroll: accepted, pan: NO_PAN }, scale));
+		compensated.push(pointX(resolveViewFrame(scroll, accepted, NO_PAN, easeOutCubic(progress)), scale));
+	}
+
+	// 补偿后每一帧都精确落在「没有夹取」那条直线上（这才是 zoomTweenFrame 承诺的东西）
+	for (let i = 0; i <= 10; i++) {
+		const { scale, scroll } = zoomTweenFrame(tween, i / 10);
+		const straight = pointX({ scroll, pan: NO_PAN }, scale);
+		assert.ok(
+			Math.abs(compensated[i] - straight) < 1e-9,
+			`progress=${i / 10} 时补偿后仍偏离直线 ${compensated[i] - straight}px`,
+		);
+	}
+	assert.ok(
+		compensated.every((value, i) => i === 0 || value <= compensated[i - 1]),
+		`补偿后点击处应当单调地滑向落点，不能中途反向；实测轨迹 ${compensated.map((v) => v.toFixed(1)).join(' → ')}`,
+	);
+
+	// 不做补偿时：内容先朝反方向漂出去、再被追回来 —— 就是用户看到的「Zoom in 抖动」
+	const drift = Math.max(...plain) - plain[0];
+	assert.ok(drift > 50, `不补偿时反向漂出的量应当明显可见，实测只有 ${drift.toFixed(1)}px`);
+	assert.ok(
+		plain.some((value, i) => i > 0 && value < plain[i - 1]),
+		'这组几何下不补偿应当出现反向，否则这条用例失去了意义',
 	);
 });
 
@@ -405,7 +459,7 @@ test('Zoom out：滚动被夹住时平移接手，内容仍走直线（不补偿
 		// 真机实测：写进去的滚动量会被同步夹进 [0, limit(scale)]，读回来就是这个值
 		const accepted = { left: Math.min(scroll.left, limit(scale)), top: 0 };
 		plain.push(centerX({ scroll: accepted, pan: NO_PAN }, scale));
-		compensated.push(centerX(resolveViewFrame(scroll, accepted, NO_PAN, easeOutCubic(progress), true), scale));
+		compensated.push(centerX(resolveViewFrame(scroll, accepted, NO_PAN, easeOutCubic(progress)), scale));
 	}
 
 	// 补偿后每一帧都精确落在「没有夹取」那条直线上（这才是 zoomTweenFrame 承诺的东西）
@@ -447,7 +501,7 @@ test('打断：残留的收回与缩放走同一条缓动曲线，内容不会�
 	for (let i = 0; i <= 10; i++) {
 		const progress = i / 10;
 		const { scale, scroll } = zoomTweenFrame(tween, progress);
-		const frame = resolveViewFrame(scroll, scroll, carry, easeOutCubic(progress), true);
+		const frame = resolveViewFrame(scroll, scroll, carry, easeOutCubic(progress));
 		series.push(originX - frame.scroll.left + frame.pan.left + (scale * extentX) / 2);
 	}
 	assert.ok(

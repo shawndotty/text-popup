@@ -1,6 +1,6 @@
 /**
  * 弹窗样式回归用例 —— 目前钉住两条：表格字号（V109 修复，2026-09-18）与视图缩放的 transform
- * （V116 第四次反馈「Zoom out 抖动」的修复，2026-09-20）。
+ * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）。
  *
  * 背景：核心给单元格直接写了字号
  * （`.markdown-rendered td { font-size: var(--table-text-size) }`、
@@ -74,9 +74,11 @@ test('单元格字号覆盖必须限定在弹窗内，不能影响编辑器与�
 /**
  * 视图缩放那条 transform 必须同时挂上平移补偿，而且 `translate` 要写在 `scale` **左边**。
  *
- * 滚动量是会被浏览器夹住的量：内容块比画布窄的那条轴上，可滚区间会随着缩小塌到 0，被夹掉的那一截
- * 只能由 transform 的平移顶上（见 modal.ts 的 panCompensation）。两个坑都在这条断言里：
- *   ① 删掉 translate 会让 Zoom out 的抖动静默回来（真机实测横向甩回 101px，Report-20260920-202610）；
+ * 滚动量是会被浏览器夹住的量：可滚区间是随 scale 变的（zoom out 时随缩小塌到 0、zoom in 时要等
+ * 放大到 scale≈1.19 才出现），被夹掉的那一截只能由 transform 的平移顶上（见 modal.ts 的
+ * resolveViewFrame）。两个坑都在这条断言里：
+ *   ① 删掉 translate 会让缩放的抖动静默回来（真机实测 Zoom out 横向甩回 101px、Zoom in 反向漂出
+ *      155px，Report-20260920-202610 / Report-20260920-223435）；
  *   ② transform 从右往左作用，写成 `scale() translate()` 时平移量会被 scale 放大，补偿的数值全错。
  */
 test('视图缩放的 transform 同时挂 scale 与平移补偿，且 translate 在 scale 左边', () => {

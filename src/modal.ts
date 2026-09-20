@@ -202,20 +202,40 @@ export function zoomTweenFrame(
 }
 
 /**
+ * 把目标滚动量夹进「该倍数下真正可达的范围」。
+ *
+ * 目标（把点击处推到画布中心）经常超出可达范围：真机实测内容块 1077 宽、画布 1481，点击落在画布
+ * 左侧时算出来的目标横向是 1191，而 2× 的上限只有 875。不夹的话终点落在范围外，收尾那一帧会被
+ * 解算成「滚动写 0、整段交给平移」，而收尾又要按终态提交 —— 内容在动画末尾跳一大段（875px 量级）。
+ * 夹到上限之后终点一定可达，收尾帧走「放得下」分支、平移自然收到 0。屏幕上的终点与夹之前**完全
+ * 相同**（浏览器本来就会把它夹到同一个值），变的只是中途那几帧（见 resolveViewFrame）。
+ */
+export function clampScroll(target: ScrollOffset, limit: ScrollOffset): ScrollOffset {
+	return { left: clamp(target.left, 0, limit.left), top: clamp(target.top, 0, limit.top) };
+}
+
+/**
  * 一帧的落位：把插值算出的滚动量落到浏览器真正接受得了的表示上，返回这一帧要写的滚动量与要由
  * transform 平移承担的差额。
  *
- * 为什么需要它：滚动量是**会被夹的量** —— 内容块比画布窄的那条轴上，可滚区间会随着缩小塌到 0。
- * 一旦被夹，`zoomTweenFrame` 那条直线就断掉：内容先被钉住、再随 scale 反向漂回去（Zoom out 抖动
- * 的成因，真机实测横向甩回 101px，见 Report-20260920-202610 §3）。
+ * 为什么需要它：滚动量是**会被夹的量**，一旦被夹，`zoomTweenFrame` 那条直线就断掉，内容先被钉住、
+ * 再随 scale 反向漂回去。两个方向都会撞上它，只是成因不同：
+ *   - Zoom out：可滚区间随缩小塌到 0（真机实测横向甩回 101px，见 Report-20260920-202610 §3）。
+ *   - Zoom in：可滚区间要等放大到 scale≈1.19 才出现（内容 1077 宽、画布 1481，1× 时横向根本滚不动），
+ *     于是前几帧的滚动被钉在 0，内容先朝**反方向**漂出 155px、再被追回来（真机实测，见
+ *     Report-20260920-223435 §3）。
+ * 所以被夹掉的那一段一律交给不受滚动上限约束的 `translate`：屏幕坐标 = 原点 − 滚动 + 平移 +
+ * scale × 本地坐标，两种分支都等于 `原点 − 目标`，边界处连续、不会跳。
  *
- * `absorbClamp` 为真时（回到 1× 的那条过渡）把被夹掉的一段交给不受滚动上限约束的 `translate`。
  * 这里有个反直觉但必须遵守的约束：**平移会让内容块末端内缩、可滚区间跟着变小**，浏览器会把刚写进去
  * 的滚动量**再夹一次**（实测写 875 / 平移到 −200 后读到 674.8）。于是「滚动担一部分、平移补一部分」
  * 是解不出来的，不动点只有两个：
  *   ① 放得下（读回来就等于目标）→ 滚动全担；
  *   ② 放不下 → 滚动写 0（0 永远合法、不会再被夹），整段交给平移。
- * 两种情形的屏幕落位都等于 `原点 − 目标`，所以边界处连续、不会跳。
+ *
+ * 前提是**目标本身可达** —— 不可达时收尾那一帧必然落在分支②、平移收不回来，兜底只能靠收尾帧按
+ * 解出的值提交（见 animateViewZoom），而那会留下永久位移。所以调用方要先用 `clampScroll` 把目标夹进
+ * 该倍数下真正可达的范围（`reachableScroll` 量出来的那个值）。
  *
  * `carry` 是上一段过渡还没收回的平移：它已经在屏幕上生效，中途被打断时不能瞬间抹掉，
  * 所以按进度收回；过渡结束（progress = 1）时它必须为 0，否则会留下永久位移。
@@ -227,15 +247,9 @@ export function resolveViewFrame(
 	accepted: ScrollOffset,
 	carry: ScrollOffset,
 	eased: number,
-	absorbClamp: boolean,
 ): { scroll: ScrollOffset; pan: ScrollOffset } {
 	const rest = 1 - clamp(eased, 0, 1);
 	const residual = { left: carry.left * rest, top: carry.top * rest };
-	if (!absorbClamp) {
-		// 不补偿的那条路（放大到 2×）：滚动照旧交给浏览器夹取 —— 终点是**算出来的**「把点击处居中」，
-		// 内容比画布窄时它本来就不在可达范围内，那里的夹取是应有行为（见 Report-20260920-184458 §3.4）。
-		return { scroll: desired, pan: residual };
-	}
 	const axis = (target: number, got: number, left: number) =>
 		got >= target - CLAMP_TOLERANCE ? { scroll: target, pan: left } : { scroll: 0, pan: left - target };
 	const x = axis(desired.left, accepted.left, residual.left);
@@ -327,7 +341,7 @@ export class TextPopupModal extends Modal {
 	/**
 	 * 平移补偿（屏幕像素）：过渡期间浏览器把滚动量夹掉的那部分，改由 transform 的 translate 顶上，
 	 * 让内容在屏幕上的位移始终等于插值给的那条线。非过渡期间它只在缩放态下可能非 0（1× 时恒为 0），
-	 * 份额与由来见 `panCompensation` / `animateViewZoom`。
+	 * 份额与由来见 `resolveViewFrame` / `animateViewZoom`。
 	 */
 	private viewPan: ScrollOffset = NO_PAN;
 	/** 空格是否按住（平移待命）。 */
@@ -753,12 +767,15 @@ export class TextPopupModal extends Modal {
 			// 偏差，详见 Report-20260920-155615。
 			const delta = zoomScrollDelta(current, next, point);
 			const shift = scrollToMove({ x: clientX, y: clientY }, viewportCenter(this.scrollEl));
-			this.animateViewZoom({
-				fromScale: current,
-				toScale: next,
-				fromScroll: from,
-				toScroll: { left: from.left + delta.left + shift.left, top: from.top + delta.top + shift.top },
-			});
+			// 两项之和要先夹进「next 倍数下真正可达的范围」再交给过渡：算出来的目标常常是够不着的
+			// （点击落在画布左侧时实测要 1191、而上限只有 875），终点不可达会让收尾帧解成
+			// 「滚动写 0、整段交给平移」、平移收不回来（见 clampScroll / resolveViewFrame）。
+			// 夹完后的终点与不夹时浏览器自己夹出来的完全相同，用户看到的落点不会变。
+			const target = clampScroll(
+				{ left: from.left + delta.left + shift.left, top: from.top + delta.top + shift.top },
+				this.reachableScroll(next),
+			);
+			this.animateViewZoom({ fromScale: current, toScale: next, fromScroll: from, toScroll: target });
 			return;
 		}
 
@@ -780,9 +797,9 @@ export class TextPopupModal extends Modal {
 	 * 滚动上限上，而滚动上限由 scale 决定；反过来的话这一帧的滚动会被夹在上一帧（更小）的上限上，
 	 * 锚点漂移。写 CSS 变量本身不会强制布局，是紧接着的滚动赋值顺带把新上限算出来的。
 	 *
-	 * 还有一层：**写进去的滚动量不一定会生效** —— 内容块比画布小的那条轴上，可滚区间会随着缩小而
-	 * 塌到 0，浏览器的夹取会把这一帧的滚动钉在上限上，上述「同进度」的前提就被打破了。所以每帧还要
-	 * 把真正生效的值读回来、把差额交给平移补偿（见 panCompensation）。
+	 * 还有一层：**写进去的滚动量不一定会生效** —— 可滚区间是随 scale 变的，zoom in 与 zoom out
+	 * 各有一种塌法（成因见 resolveViewFrame），浏览器的夹取会把这一帧的滚动钉在上限上，上述
+	 * 「同进度」的前提就被打破了。所以每帧还要把真正生效的值读回来、把差额交给平移补偿。
 	 */
 	private animateViewZoom(tween: ZoomTween): void {
 		this.cancelViewZoom();
@@ -793,9 +810,7 @@ export class TextPopupModal extends Modal {
 			return;
 		}
 
-		// 只有「回到 1×」这条过渡才用平移顶替被夹掉的滚动量（理由见 resolveViewFrame）；
 		// 上一段过渡没收回的平移交给 carry，按进度收回，中途被打断时不会瞬间抹掉。
-		const absorbClamp = tween.toScale === 1;
 		const carry = this.viewPan;
 		// 零点取**第一帧的 timestamp**、而不是发出请求的时刻：rAF 的回调比请求晚一帧左右，
 		// 拿请求时刻当零点会让这段差值凭空吃掉一部分进度（表现为第一帧就跳一段）。
@@ -817,7 +832,6 @@ export class TextPopupModal extends Modal {
 				carry,
 				// 与 scale / 滚动同一条缓动曲线，否则残留的收回节奏与缩放对不上
 				easeOutCubic(progress),
-				absorbClamp,
 			);
 			this.scrollEl.scrollLeft = settled.scroll.left;
 			this.scrollEl.scrollTop = settled.scroll.top;
@@ -827,8 +841,11 @@ export class TextPopupModal extends Modal {
 				return;
 			}
 			this.viewZoomFrame = null;
-			// 收尾写一次精确值：插值到 1× 时 applyViewZoom 顺手把 transform 摘掉（见 applyViewTransform）
-			this.applyViewZoom(tween.toScale);
+			// 收尾提交的正是**这一帧解算出来的状态**，而不是「写一次精确的终态、顺便把平移清零」：
+			// 终点可达时 settled.pan 本来就是 0（残留收到 0、目标放得下），两者等价；万一量出来的上限
+			// 与浏览器的夹取差个零点几像素、这一帧被解成「整段交给平移」，清零会让内容在收尾跳一大段。
+			// 回到 1× 时 applyViewTransform 自己会把平移归零、把 transform 摘掉（见 applyViewTransform）。
+			this.applyViewTransform(tween.toScale, settled.pan);
 		};
 		this.viewZoomFrame = { win, id: win.requestAnimationFrame(step) };
 	}
@@ -838,6 +855,30 @@ export class TextPopupModal extends Modal {
 		if (this.viewZoomFrame === null) return;
 		this.viewZoomFrame.win.cancelAnimationFrame(this.viewZoomFrame.id);
 		this.viewZoomFrame = null;
+	}
+
+	/**
+	 * 某个倍数下**真正可达**的滚动上限（`scrollWidth − clientWidth` 那一对值）。
+	 *
+	 * 为什么量而不是算：上限取决于内容块超出可视区的那部分，而内容块是横着居中（`margin: auto`）、
+	 * 竖着贴边的 —— 两轴的式子不一样（真机实测 2× 下横向 875、纵向 10798），照「内容尺寸 × 倍数」算
+	 * 必错。量法是把倍数**临时**写上去、读一次、再还原：全程同步、中间没有 paint，用户看不到。
+	 *
+	 * 量之前先把平移归零（`NO_PAN`）：平移会让内容块末端内缩、可滚区间跟着变小，而每帧解算读到的
+	 * 也是「平移归零后」的上限，两者必须是同一个数（见 animateViewZoom）。
+	 */
+	private reachableScroll(scale: number): ScrollOffset {
+		const el = this.scrollEl;
+		const zoom = this.viewZoom;
+		const pan = this.viewPan;
+		const scroll = { left: el.scrollLeft, top: el.scrollTop };
+		this.applyViewTransform(scale, NO_PAN);
+		const limit = { left: el.scrollWidth - el.clientWidth, top: el.scrollHeight - el.clientHeight };
+		// 按进来时的状态原样还原：倍数、平移、滚动位置三个值一个都不能留在临时状态上
+		this.applyViewTransform(zoom, pan);
+		el.scrollLeft = scroll.left;
+		el.scrollTop = scroll.top;
+		return limit;
 	}
 
 	/**
