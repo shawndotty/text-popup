@@ -33,6 +33,12 @@ const MERMAID_SCALE_MAX = 4;
  */
 const CLICK_ZOOM_FACTOR = 2;
 
+/**
+ * 视图缩放过渡的时长（ms）。取 500 与 reveal.js zoom 插件的默认 `transitionDuration` 一致 ——
+ * 「Alt+Click 放大」这套手感本来就以它为蓝本（见 Plan-20260920-154434 §1）。
+ */
+const VIEW_ZOOM_DURATION = 500;
+
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
@@ -134,6 +140,62 @@ export function scrollToMove(
 	return { left: from.x - to.x, top: from.y - to.y };
 }
 
+/** 画布的滚动位置（`scrollLeft` / `scrollTop` 这一对总是成对出现）。 */
+export interface ScrollOffset {
+	left: number;
+	top: number;
+}
+
+/** 一次视图缩放过渡的起止状态；中间帧由 `zoomTweenFrame` 插出来。 */
+export interface ZoomTween {
+	fromScale: number;
+	toScale: number;
+	fromScroll: ScrollOffset;
+	toScroll: ScrollOffset;
+}
+
+/**
+ * 缓动曲线：easeOutCubic（起步快、收尾慢）。点击后立刻有反馈、落点又不生硬，
+ * 比线性或 ease-in 更贴合「放大到某处停住」这个动作。
+ */
+export function easeOutCubic(progress: number): number {
+	const t = clamp(progress, 0, 1);
+	return 1 - (1 - t) ** 3;
+}
+
+/**
+ * 过渡的一帧：按进度 `progress`（0~1，未缓动）算出这一帧该写的 scale 与滚动位置。
+ *
+ * 为什么两者必须共用**同一条**缓动曲线、同一个进度：
+ * 屏幕坐标 = 元素原点 − 滚动量 + scale · 元素本地坐标（transform-origin 在 0 0）。代入
+ * scale(t) = s₁ + e·(s₂−s₁)、scroll(t) = L₁ + e·(L₂−L₁) 后，被锚定的那一点在屏幕上正好是
+ * `点击处 + e · (画布中心 − 点击处)` —— 也就是沿直线从原位置滑到画布中心。任何一项自己走
+ * 另一条时间线（例如滚动瞬间到位、scale 慢慢变），中途都会看到内容先跳一下再缩放。
+ *
+ * 越界的 progress 直接夹到 [0, 1]：rAF 的最后一帧可能略微超时，不夹会写过头再回弹。
+ */
+export function zoomTweenFrame(
+	tween: ZoomTween,
+	progress: number,
+): { scale: number; scroll: ScrollOffset } {
+	const e = easeOutCubic(progress);
+	return {
+		scale: tween.fromScale + (tween.toScale - tween.fromScale) * e,
+		scroll: {
+			left: tween.fromScroll.left + (tween.toScroll.left - tween.fromScroll.left) * e,
+			top: tween.fromScroll.top + (tween.toScroll.top - tween.fromScroll.top) * e,
+		},
+	};
+}
+
+/**
+ * 系统开了「减少动态效果」时不做过渡。动画纯属观感，用户显式关掉就该直接给结果；
+ * 这条分支同时也是「瞬时跳变」这套旧行为的回归路径。
+ */
+function prefersReducedMotion(): boolean {
+	return activeWindow.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** 单个条目的内容。 */
 export interface TextPopupBody {
 	/** 纯文本内容（extractText），回退路径使用。 */
@@ -169,6 +231,7 @@ export interface TextPopupSource {
  * - 用 ← / → 在同一个笔记的全部被标记块之间切换，环绕规则与内置图片 lightbox 一致。
  * - 底部控制条提供字号与缩放；只影响本次弹窗，不写回设置。
  * - `Alt(Option)+Click` 以点击处为锚放大、并把它推到画布中心（再点还原），放大后按住空格可拖拽平移。
+ *   放大 / 还原都走一段 500ms 的过渡（缓动 + 逐帧插值），不是瞬间跳变，见 animateViewZoom。
  * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
  */
 export class TextPopupModal extends Modal {
@@ -198,7 +261,14 @@ export class TextPopupModal extends Modal {
 	 * 进入放大前的滚动位置。再点一下还原时写回去 —— 「刚才看到哪儿」比「放大到哪儿」更重要，
 	 * 而放大期间浏览器会把 scrollTop 夹在新范围内，不写回就回不到原位。
 	 */
-	private viewZoomReturn: { left: number; top: number } | null = null;
+	private viewZoomReturn: ScrollOffset | null = null;
+	/**
+	 * 正在跑的视图缩放过渡；null = 没有过渡。
+	 * 任何「立刻要一个确定状态」的路径（切换条目、恢复默认、开始拖拽、关窗）都要先取消它，
+	 * 否则后续几帧里插值会把刚写好的状态覆盖掉。窗口一起存：弹窗被拖到 pop-out 窗口后
+	 * `activeWindow` 会变，取消得回到当初发出那一帧的窗口上去取消。
+	 */
+	private viewZoomFrame: { win: Window; id: number } | null = null;
 	/** 空格是否按住（平移待命）。 */
 	private spaceDown = false;
 	/** 正在拖拽平移时的起点；非空 = 正在拖（也用来给文档级 pointermove 做门禁）。 */
@@ -278,6 +348,8 @@ export class TextPopupModal extends Modal {
 
 	private onPointerDown = (evt: PointerEvent): void => {
 		if (!this.spaceDown || evt.button !== 0) return;
+		// 拖拽要自己写滚动位置，与过渡的插值会互相覆盖 —— 抢到控制权时先把过渡停掉
+		this.cancelViewZoom();
 		this.panOrigin = {
 			pointerId: evt.pointerId,
 			x: evt.clientX,
@@ -376,6 +448,8 @@ export class TextPopupModal extends Modal {
 		activeWindow.removeEventListener('blur', this.onWindowBlur);
 		// 平移待命的皮肤（is-pan-ready / is-panning）也要清掉，别留在节点上
 		this.endPanReady();
+		// 过渡帧比弹窗活得长的话，下一帧会去写已经拆掉的 DOM
+		this.cancelViewZoom();
 		this.contentEl.empty();
 		// 观察器与窗口监听都属于「弹窗存续期间」的资源，关窗必须解绑，否则会跟着窗口一直留着
 		this.mermaidObserver?.disconnect();
@@ -430,6 +504,7 @@ export class TextPopupModal extends Modal {
 		this.scrollEl.scrollTop = 0;
 		this.scrollEl.scrollLeft = 0;
 		// 视图缩放的锚点属于上一块内容，不复用；同理上一块的「还原位置」也作废
+		this.cancelViewZoom();
 		this.applyViewZoom(1);
 		this.viewZoomReturn = null;
 		this.updateTitle();
@@ -584,6 +659,7 @@ export class TextPopupModal extends Modal {
 		this.fontSize = this.settings.popupFontSize;
 		this.zoom = DEFAULT_ZOOM;
 		// 「恢复默认」要名副其实：字号、缩放、视图缩放三者全复原
+		this.cancelViewZoom();
 		this.applyViewZoom(1);
 		this.viewZoomReturn = null;
 		this.updateSize();
@@ -592,6 +668,9 @@ export class TextPopupModal extends Modal {
 	/**
 	 * Alt+Click：未放大时以点击点为锚放大、并把它推到画布中心；已放大时还原到进入前的位置。
 	 *
+	 * 两端的 scale 与滚动位置先一次算清，再交给 `animateViewZoom` 插值过去 —— 过渡期间用户
+	 * 再点一下也只是换一对新的起止值（起点取当前实际值），不会跳。
+	 *
 	 * 点击点坐标用 `getBoundingClientRect()` 现算，而不是自己累加内边距 / `margin: auto` 的偏移：
 	 * `transform-origin: 0 0` 下缩放后的包围盒左上角与缩放前重合，所以 rect 的 left/top 就是
 	 * 元素的未缩放原点（见 elementPoint）。
@@ -599,37 +678,85 @@ export class TextPopupModal extends Modal {
 	private toggleClickZoom(clientX: number, clientY: number): void {
 		const current = this.viewZoom;
 		const next = clickZoomTarget(current, CLICK_ZOOM_FACTOR);
+		const from = { left: this.scrollEl.scrollLeft, top: this.scrollEl.scrollTop };
 
 		if (current === 1) {
-			// 先记下「放大前看到哪儿」，再动 scale
-			this.viewZoomReturn = { left: this.scrollEl.scrollLeft, top: this.scrollEl.scrollTop };
+			// 先记下「放大前看到哪儿」：再点一下还原时写回它（「刚才看到哪儿」优先于「居中到哪儿」）
+			this.viewZoomReturn = from;
 			const rect = this.textEl?.getBoundingClientRect();
 			const point = rect ? elementPoint(clientX, clientY, rect, current) : { x: 0, y: 0 };
-			// 顺序不能反：先写 scale 变量，再写滚动量。反过来的话赋值会被夹在旧的（未放大）上限上，
-			// 锚点漂移。不额外强制布局 —— 实测在中间插一次 `void scrollWidth` 对结果没有任何影响。
-			// 残余误差 ≤ 1.3px，来自浏览器把滚动位置按设备像素对齐（本机 DPR 1.728、1 设备像素 =
-			// 0.58px，实测落到比目标少 2 个设备像素）；同一个目标值晚一步再写会落到 0.23px 以内，
-			// 说明算式本身没有偏差。详见 Report-20260920-155615。所以这里保持最简的写法。
-			this.applyViewZoom(next);
 			// 两项之和：zoomScrollDelta 让点击处**不动**（补偿放大本身），scrollToMove 再把它
 			// 从原位置**推到画布中心**（V116 第二次反馈要的 reveal.js 手感，见 Plan-20260920-161511 §2.2）。
 			// 点击处离文档边缘太近时居中量会被滚动上限夹掉（做不到居中），内容不会丢。
+			// 残余误差 ≤ 1.3px，来自浏览器把滚动位置按设备像素对齐（本机 DPR 1.728）；算式本身没有
+			// 偏差，详见 Report-20260920-155615。
 			const delta = zoomScrollDelta(current, next, point);
 			const shift = scrollToMove({ x: clientX, y: clientY }, viewportCenter(this.scrollEl));
-			this.scrollEl.scrollLeft += delta.left + shift.left;
-			this.scrollEl.scrollTop += delta.top + shift.top;
+			this.animateViewZoom({
+				fromScale: current,
+				toScale: next,
+				fromScroll: from,
+				toScroll: { left: from.left + delta.left + shift.left, top: from.top + delta.top + shift.top },
+			});
 			return;
 		}
 
-		this.applyViewZoom(next);
-		const back = this.viewZoomReturn;
+		// 从 2× 回到 1× 不需要算补偿：回到进入前的位置即可（浏览器自己会把越界值夹回范围内）
+		const back = this.viewZoomReturn ?? from;
 		this.viewZoomReturn = null;
-		if (back) {
-			// 从 2× 回到 1× 不需要算补偿：写回进入前的位置即可（浏览器自己会把越界值夹回范围内）。
-			// 也是「刚才看到哪儿」优先于「居中到哪儿」。
-			this.scrollEl.scrollLeft = back.left;
-			this.scrollEl.scrollTop = back.top;
+		this.animateViewZoom({ fromScale: current, toScale: next, fromScroll: from, toScroll: back });
+	}
+
+	/**
+	 * 把视图缩放从当前状态过渡到 `tween` 的目标状态。
+	 *
+	 * 为什么 scale 与滚动都用 JS 逐帧写、而不是给 transform 加一条 CSS transition：屏幕坐标 =
+	 * 元素原点 − 滚动量 + scale × 元素本地坐标，两者必须**同进度**地一起动（推导见 zoomTweenFrame）。
+	 * CSS transition 只管 transform 这一项，滚动还得靠另一条时间线去追，两条时间线一定会错开，
+	 * 中途就能看到锚点漂移。逐帧自己写则天然同步，且只留一条缓动曲线。
+	 *
+	 * **每帧都必须先写 scale 变量、再写滚动量**（与旧版瞬时写入同因）：滚动赋值会被夹在当前的
+	 * 滚动上限上，而滚动上限由 scale 决定；反过来的话这一帧的滚动会被夹在上一帧（更小）的上限上，
+	 * 锚点漂移。写 CSS 变量本身不会强制布局，是紧接着的滚动赋值顺带把新上限算出来的。
+	 */
+	private animateViewZoom(tween: ZoomTween): void {
+		this.cancelViewZoom();
+		if (prefersReducedMotion()) {
+			this.applyViewZoom(tween.toScale);
+			this.scrollEl.scrollLeft = tween.toScroll.left;
+			this.scrollEl.scrollTop = tween.toScroll.top;
+			return;
 		}
+
+		// 零点取**第一帧的 timestamp**、而不是发出请求的时刻：rAF 的回调比请求晚一帧左右，
+		// 拿请求时刻当零点会让这段差值凭空吃掉一部分进度（表现为第一帧就跳一段）。
+		// 帧回调挂在 activeWindow 上（与 onOpen 的 activeWindow.addEventListener 同理）：
+		// 弹窗可以被拖到 pop-out 窗口里，裸的 requestAnimationFrame 认的是主窗口。
+		const win = activeWindow;
+		let start: number | null = null;
+		const step = (now: number): void => {
+			start ??= now;
+			const progress = Math.min(1, (now - start) / VIEW_ZOOM_DURATION);
+			const { scale, scroll } = zoomTweenFrame(tween, progress);
+			this.applyViewZoom(scale);
+			this.scrollEl.scrollLeft = scroll.left;
+			this.scrollEl.scrollTop = scroll.top;
+			if (progress < 1) {
+				this.viewZoomFrame = { win, id: win.requestAnimationFrame(step) };
+				return;
+			}
+			this.viewZoomFrame = null;
+			// 收尾写一次精确值：插值到 1× 时 applyViewZoom 顺手把 transform 摘掉（见 applyViewZoom）
+			this.applyViewZoom(tween.toScale);
+		};
+		this.viewZoomFrame = { win, id: win.requestAnimationFrame(step) };
+	}
+
+	/** 停掉正在跑的过渡。过渡只是观感，随时可以被一条「直接要终态」的路径打断。 */
+	private cancelViewZoom(): void {
+		if (this.viewZoomFrame === null) return;
+		this.viewZoomFrame.win.cancelAnimationFrame(this.viewZoomFrame.id);
+		this.viewZoomFrame = null;
 	}
 
 	/**
@@ -639,6 +766,9 @@ export class TextPopupModal extends Modal {
 	 * 2× → 1× 的 scale 变化不会触发重算，滚动区会停在放大后的尺寸（实测点「恢复默认」后
 	 * scrollWidth/scrollHeight 停在 1701 / 7791，而正文只有 1481 / 3992 —— 能滚到正文之外的空白）。
 	 * 摘掉 transform（computed 变 `none`）才会重算。详见 styles.css 与 Report-20260920-155615。
+	 *
+	 * 过渡期间由 `animateViewZoom` 每帧用一个中间值调用它：类在插值一开始（scale 刚离开 1）就挂上，
+	 * 一直留到收尾那一帧写回精确的 1 才摘掉 —— 「挂上 / 摘掉」各只发生一次，中间帧只改变量。
 	 */
 	private applyViewZoom(scale: number): void {
 		this.viewZoom = scale;
