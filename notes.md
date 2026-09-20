@@ -1,1 +1,3 @@
-- refactor code
+- add suport for quotes block
+- change styles
+- fix inline codeblock embeded image render bug
