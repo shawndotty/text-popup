@@ -28,6 +28,12 @@
  * scale 与滚动必须同进度** —— 那正是「被锚定的点沿直线滑到画布中心」的充要条件（推导见
  * `zoomTweenFrame` 的注释）。帧率是否真的够平滑、有没有掉帧只能真机量
  * （见 Report-20260920-184458）。
+ *
+ * ⑤ `resolveViewFrame` —— V116 第四次反馈「Zoom out 有比较明显的抖动」（2026-09-20）。
+ * 抖动来自滚动被浏览器夹住：内容块比画布窄的那条轴上，可滚区间会随着缩小塌到 0，写进去的滚动量
+ * 不再生效，`zoomTweenFrame` 那条直线于是断掉，内容先被钉住、再随 scale 反向甩回来（真机实测
+ * 横向甩回 101px，见 Report-20260920-202610 §3）。这里钉住补偿的两个分支与两个端点，
+ * 并用真机那组几何跑一遍「夹取 vs 补偿」的对照（不补偿必须出现反向，补偿后必须单调）。
  */
 
 import assert from 'node:assert/strict';
@@ -43,6 +49,7 @@ const {
 	easeOutCubic,
 	elementPoint,
 	headingColorVariables,
+	resolveViewFrame,
 	scrollToMove,
 	viewportCenter,
 	zoomScrollDelta,
@@ -311,5 +318,140 @@ test('反例：scale 与滚动各走各的时间线时，锚点会脱轨', () =>
 	assert.ok(
 		Math.hypot(jumped.x - click.x, jumped.y - click.y) > 10,
 		`时间线错开时锚点应当明显离开点击处，实测只偏了 ${Math.hypot(jumped.x - click.x, jumped.y - click.y)}px`,
+	);
+});
+
+const NO_PAN = { left: 0, top: 0 };
+
+test('resolveViewFrame：没被夹时滚动全担，收尾必须是干净的 transform', () => {
+	const desired = { left: 875, top: 519 };
+	for (const progress of [0, 0.5, 1]) {
+		const frame = resolveViewFrame(desired, desired, NO_PAN, progress, true);
+		assert.deepEqual(frame.scroll, desired, `progress=${progress} 时滚动量应当原样写下去`);
+		assert.deepEqual(frame.pan, NO_PAN, `progress=${progress} 时不该有平移：没被夹就不该动内容`);
+	}
+});
+
+test('resolveViewFrame：被夹掉时滚动写 0、整段交给平移（平移会再把滚动夹一次，只能这么做）', () => {
+	// 真机实测：平移到 −200 之后，原本 875 的滚动会被浏览器夹到 674.8 —— 所以「滚动担一部分、
+	// 平移补一部分」解不出来，滚动必须写 0（0 永远合法、不会再被夹）。
+	const desired = { left: 300, top: 0 };
+	const accepted = { left: 0, top: 0 };
+	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, true);
+	assert.deepEqual(frame.scroll, NO_PAN, '放不下时滚动归 0，不能留在被夹后的那个值上');
+	assert.equal(frame.pan.left, -300, '差额必须由平移顶上（负值 = 让 transform 再往左推 300px）');
+	// 屏幕落位 = 原点 − 滚动 + 平移，两种分支下都必须等于 原点 − 目标
+	const landed = (f, origin) => origin - f.scroll.left + f.pan.left;
+	assert.equal(landed(frame, 1000), landed({ scroll: desired, pan: NO_PAN }, 1000), '两种分支的落位必须一致，否则边界会跳');
+});
+
+test('resolveViewFrame：上一段过渡的残留按进度收回，最后一帧必须归零', () => {
+	// 入参是**缓动后**的进度（与 scale / 滚动同一条曲线，调用方传 easeOutCubic 的结果）
+	const carry = { left: -164, top: -20 };
+	const fits = (eased) => resolveViewFrame(NO_PAN, NO_PAN, carry, eased, true).pan;
+	assert.equal(fits(0).left, -164, '进度 0 时残留在原位 —— 打断那一刻画面不能动');
+	assert.equal(fits(0.5).left, -82, '中途按同一进度收回');
+	// 用 `=== 0` 而不是 assert.equal：`-164 * 0` 是 -0，写进 CSS 就是 `0px`，语义上等价
+	assert.ok(fits(1).left === 0, '收尾必须收到 0，否则会留下永久位移');
+	assert.ok(fits(9).left === 0, '越界的进度也要夹住');
+});
+
+test('resolveViewFrame：读数只差零点几像素（设备像素对齐）时仍算「放得下」，分支不能来回翻', () => {
+	// 真机实测：DPR 1.728 时滚动位置按设备像素对齐，1 设备像素 ≈ 0.58px，读回来常比目标小一点
+	const desired = { left: 479.75, top: 0 };
+	const accepted = { left: 479.17199999999997, top: 0 };
+	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, true);
+	assert.deepEqual(frame.scroll, desired, '差不到 1px 应当照旧走「滚动全担」，否则滚动量会无谓地在 0 与目标间跳');
+	assert.deepEqual(frame.pan, NO_PAN, '这种量级不该动用平移');
+});
+
+test('resolveViewFrame：放大到 2× 那条路不补偿，滚动照旧交给浏览器夹', () => {
+	// 终点是「把点击处居中」这条**算出来的**目标，内容比画布窄时它本来就不在可达范围内，
+	// 那里的夹取是应有行为（Report-20260920-184458 §3.4），补偿收不回来、只会留下永久位移。
+	const desired = { left: 1257, top: 0 };
+	const accepted = { left: 875, top: 0 };
+	const frame = resolveViewFrame(desired, accepted, NO_PAN, 0.5, false);
+	assert.deepEqual(frame.scroll, desired, '不补偿时照旧写目标值，让浏览器去夹');
+	assert.deepEqual(frame.pan, NO_PAN, '不补偿时不该有平移');
+	assert.deepEqual(
+		resolveViewFrame(desired, accepted, { left: -164, top: 0 }, 0.5, false).pan,
+		{ left: -82, top: 0 },
+		'但被打断时留下的残留仍要收回，否则会瞬间跳一下',
+	);
+});
+
+test('Zoom out：滚动被夹住时平移接手，内容仍走直线（不补偿则反向甩回）', () => {
+	// 与真机同一组几何（Report-20260920-202610 §3）：内容块 1077.07 宽、居中在 1481.48 的画布里。
+	// 可滚区间 = 内容块超出可视区的那部分，缩小到 scale≈1.19 就塌成 0 —— 这就是夹取的来源。
+	const originX = 202.21;
+	const extentX = 1077.07;
+	const viewport = 1481.48;
+	const limit = (scale) => Math.max(0, originX + extentX * scale - viewport);
+	// 从 2× 的落点（已贴着上限）回到 1× 的原位
+	const tween = {
+		fromScale: 2,
+		toScale: 1,
+		fromScroll: { left: 875, top: 0 },
+		toScroll: { left: 0, top: 0 },
+	};
+	/** 内容块中心在屏幕上的位置：原点 − 滚动 + 平移 + scale × 半宽。 */
+	const centerX = (frame, scale) => originX - frame.scroll.left + frame.pan.left + (scale * extentX) / 2;
+
+	const plain = [];
+	const compensated = [];
+	for (let i = 0; i <= 10; i++) {
+		const progress = i / 10;
+		const { scale, scroll } = zoomTweenFrame(tween, progress);
+		// 真机实测：写进去的滚动量会被同步夹进 [0, limit(scale)]，读回来就是这个值
+		const accepted = { left: Math.min(scroll.left, limit(scale)), top: 0 };
+		plain.push(centerX({ scroll: accepted, pan: NO_PAN }, scale));
+		compensated.push(centerX(resolveViewFrame(scroll, accepted, NO_PAN, easeOutCubic(progress), true), scale));
+	}
+
+	// 补偿后每一帧都精确落在「没有夹取」那条直线上（这才是 zoomTweenFrame 承诺的东西）
+	for (let i = 0; i <= 10; i++) {
+		const { scale, scroll } = zoomTweenFrame(tween, i / 10);
+		const straight = centerX({ scroll, pan: NO_PAN }, scale);
+		assert.ok(
+			Math.abs(compensated[i] - straight) < 1e-9,
+			`progress=${i / 10} 时补偿后仍偏离直线 ${compensated[i] - straight}px`,
+		);
+	}
+	assert.ok(
+		compensated.every((value, i) => i === 0 || value >= compensated[i - 1]),
+		'补偿后内容应当单调地滑向落点，不能中途反向',
+	);
+
+	// 不做补偿时：内容先被钉住、再随 scale 反向甩回来 —— 就是用户看到的「Zoom out 抖动」
+	assert.ok(
+		plain.some((value, i) => i > 0 && value < plain[i - 1]),
+		'这组几何下不补偿应当出现反向，否则这条用例失去了意义',
+	);
+	const swingBack = Math.max(...plain) - plain[plain.length - 1];
+	assert.ok(swingBack > 50, `不补偿时甩回量应当明显可见，实测只有 ${swingBack.toFixed(1)}px`);
+});
+
+test('打断：残留的收回与缩放走同一条缓动曲线，内容不会反向', () => {
+	// 真机场景（Report-20260920-202610 §4）：从 2× 往 1× 收的途中又 Alt+点一下，新过渡的起点就是
+	// 当时的真实状态 —— 此时平移里还压着 212px 没收回，它必须在这次过渡里按**同一条曲线**收完。
+	const originX = 202.21;
+	const extentX = 1077.07;
+	const carry = { left: -212, top: 0 };
+	const tween = {
+		fromScale: 1.2423,
+		toScale: 1,
+		fromScroll: { left: 0, top: 0 },
+		toScroll: { left: 0, top: 0 },
+	};
+	const series = [];
+	for (let i = 0; i <= 10; i++) {
+		const progress = i / 10;
+		const { scale, scroll } = zoomTweenFrame(tween, progress);
+		const frame = resolveViewFrame(scroll, scroll, carry, easeOutCubic(progress), true);
+		series.push(originX - frame.scroll.left + frame.pan.left + (scale * extentX) / 2);
+	}
+	assert.ok(
+		series.every((value, i) => i === 0 || value >= series[i - 1]),
+		`残留若按原始进度收回（与缩放错开），内容会先反向漂一下；实测轨迹 ${series.map((v) => v.toFixed(1)).join(' → ')}`,
 	);
 });

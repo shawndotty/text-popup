@@ -146,6 +146,19 @@ export interface ScrollOffset {
 	top: number;
 }
 
+/** 没有平移的初始值（`viewPan` 的默认值，也是每帧写滚动量前要先归到的状态）。 */
+const NO_PAN: ScrollOffset = { left: 0, top: 0 };
+
+/**
+ * 判「这一帧的滚动量放得下」的容差（CSS 像素）。
+ *
+ * read-back 的滚动量会被浏览器按设备像素对齐（本机 DPR 1.728 → 1 设备像素 ≈ 0.58px），
+ * `scrollWidth` / `clientWidth` 又是整数，所以目标值与读回值差零点几像素是常态。不给容差的话分支会在
+ * 边界上来回翻：两种分支的屏幕落位是同一个值（见 `resolveViewFrame`），画面不会变，但滚动量会莫名
+ * 在 0 与目标之间跳，读日志的人会以为坏了。容差只有 1px，远小于真正需要补偿的量级（真机实测 164px）。
+ */
+const CLAMP_TOLERANCE = 1;
+
 /** 一次视图缩放过渡的起止状态；中间帧由 `zoomTweenFrame` 插出来。 */
 export interface ZoomTween {
 	fromScale: number;
@@ -186,6 +199,48 @@ export function zoomTweenFrame(
 			top: tween.fromScroll.top + (tween.toScroll.top - tween.fromScroll.top) * e,
 		},
 	};
+}
+
+/**
+ * 一帧的落位：把插值算出的滚动量落到浏览器真正接受得了的表示上，返回这一帧要写的滚动量与要由
+ * transform 平移承担的差额。
+ *
+ * 为什么需要它：滚动量是**会被夹的量** —— 内容块比画布窄的那条轴上，可滚区间会随着缩小塌到 0。
+ * 一旦被夹，`zoomTweenFrame` 那条直线就断掉：内容先被钉住、再随 scale 反向漂回去（Zoom out 抖动
+ * 的成因，真机实测横向甩回 101px，见 Report-20260920-202610 §3）。
+ *
+ * `absorbClamp` 为真时（回到 1× 的那条过渡）把被夹掉的一段交给不受滚动上限约束的 `translate`。
+ * 这里有个反直觉但必须遵守的约束：**平移会让内容块末端内缩、可滚区间跟着变小**，浏览器会把刚写进去
+ * 的滚动量**再夹一次**（实测写 875 / 平移到 −200 后读到 674.8）。于是「滚动担一部分、平移补一部分」
+ * 是解不出来的，不动点只有两个：
+ *   ① 放得下（读回来就等于目标）→ 滚动全担；
+ *   ② 放不下 → 滚动写 0（0 永远合法、不会再被夹），整段交给平移。
+ * 两种情形的屏幕落位都等于 `原点 − 目标`，所以边界处连续、不会跳。
+ *
+ * `carry` 是上一段过渡还没收回的平移：它已经在屏幕上生效，中途被打断时不能瞬间抹掉，
+ * 所以按进度收回；过渡结束（progress = 1）时它必须为 0，否则会留下永久位移。
+ * `eased` 要传**缓动后**的进度（与 scale / 滚动同一条曲线）：收回的节奏若与缩放对不上，
+ * 打断后内容会先反向漂一下 —— 收回走原始进度、缩放走 easeOutCubic 时实测甩了 22px。
+ */
+export function resolveViewFrame(
+	desired: ScrollOffset,
+	accepted: ScrollOffset,
+	carry: ScrollOffset,
+	eased: number,
+	absorbClamp: boolean,
+): { scroll: ScrollOffset; pan: ScrollOffset } {
+	const rest = 1 - clamp(eased, 0, 1);
+	const residual = { left: carry.left * rest, top: carry.top * rest };
+	if (!absorbClamp) {
+		// 不补偿的那条路（放大到 2×）：滚动照旧交给浏览器夹取 —— 终点是**算出来的**「把点击处居中」，
+		// 内容比画布窄时它本来就不在可达范围内，那里的夹取是应有行为（见 Report-20260920-184458 §3.4）。
+		return { scroll: desired, pan: residual };
+	}
+	const axis = (target: number, got: number, left: number) =>
+		got >= target - CLAMP_TOLERANCE ? { scroll: target, pan: left } : { scroll: 0, pan: left - target };
+	const x = axis(desired.left, accepted.left, residual.left);
+	const y = axis(desired.top, accepted.top, residual.top);
+	return { scroll: { left: x.scroll, top: y.scroll }, pan: { left: x.pan, top: y.pan } };
 }
 
 /**
@@ -269,6 +324,12 @@ export class TextPopupModal extends Modal {
 	 * `activeWindow` 会变，取消得回到当初发出那一帧的窗口上去取消。
 	 */
 	private viewZoomFrame: { win: Window; id: number } | null = null;
+	/**
+	 * 平移补偿（屏幕像素）：过渡期间浏览器把滚动量夹掉的那部分，改由 transform 的 translate 顶上，
+	 * 让内容在屏幕上的位移始终等于插值给的那条线。非过渡期间它只在缩放态下可能非 0（1× 时恒为 0），
+	 * 份额与由来见 `panCompensation` / `animateViewZoom`。
+	 */
+	private viewPan: ScrollOffset = NO_PAN;
 	/** 空格是否按住（平移待命）。 */
 	private spaceDown = false;
 	/** 正在拖拽平移时的起点；非空 = 正在拖（也用来给文档级 pointermove 做门禁）。 */
@@ -718,6 +779,10 @@ export class TextPopupModal extends Modal {
 	 * **每帧都必须先写 scale 变量、再写滚动量**（与旧版瞬时写入同因）：滚动赋值会被夹在当前的
 	 * 滚动上限上，而滚动上限由 scale 决定；反过来的话这一帧的滚动会被夹在上一帧（更小）的上限上，
 	 * 锚点漂移。写 CSS 变量本身不会强制布局，是紧接着的滚动赋值顺带把新上限算出来的。
+	 *
+	 * 还有一层：**写进去的滚动量不一定会生效** —— 内容块比画布小的那条轴上，可滚区间会随着缩小而
+	 * 塌到 0，浏览器的夹取会把这一帧的滚动钉在上限上，上述「同进度」的前提就被打破了。所以每帧还要
+	 * 把真正生效的值读回来、把差额交给平移补偿（见 panCompensation）。
 	 */
 	private animateViewZoom(tween: ZoomTween): void {
 		this.cancelViewZoom();
@@ -728,6 +793,10 @@ export class TextPopupModal extends Modal {
 			return;
 		}
 
+		// 只有「回到 1×」这条过渡才用平移顶替被夹掉的滚动量（理由见 resolveViewFrame）；
+		// 上一段过渡没收回的平移交给 carry，按进度收回，中途被打断时不会瞬间抹掉。
+		const absorbClamp = tween.toScale === 1;
+		const carry = this.viewPan;
 		// 零点取**第一帧的 timestamp**、而不是发出请求的时刻：rAF 的回调比请求晚一帧左右，
 		// 拿请求时刻当零点会让这段差值凭空吃掉一部分进度（表现为第一帧就跳一段）。
 		// 帧回调挂在 activeWindow 上（与 onOpen 的 activeWindow.addEventListener 同理）：
@@ -738,15 +807,27 @@ export class TextPopupModal extends Modal {
 			start ??= now;
 			const progress = Math.min(1, (now - start) / VIEW_ZOOM_DURATION);
 			const { scale, scroll } = zoomTweenFrame(tween, progress);
-			this.applyViewZoom(scale);
+			// 平移必须先归零再写滚动量：平移会缩小可滚区间，先归零读到的才是内容块自身的上限
+			this.applyViewTransform(scale, NO_PAN);
 			this.scrollEl.scrollLeft = scroll.left;
 			this.scrollEl.scrollTop = scroll.top;
+			const settled = resolveViewFrame(
+				scroll,
+				{ left: this.scrollEl.scrollLeft, top: this.scrollEl.scrollTop },
+				carry,
+				// 与 scale / 滚动同一条缓动曲线，否则残留的收回节奏与缩放对不上
+				easeOutCubic(progress),
+				absorbClamp,
+			);
+			this.scrollEl.scrollLeft = settled.scroll.left;
+			this.scrollEl.scrollTop = settled.scroll.top;
+			this.applyViewTransform(scale, settled.pan);
 			if (progress < 1) {
 				this.viewZoomFrame = { win, id: win.requestAnimationFrame(step) };
 				return;
 			}
 			this.viewZoomFrame = null;
-			// 收尾写一次精确值：插值到 1× 时 applyViewZoom 顺手把 transform 摘掉（见 applyViewZoom）
+			// 收尾写一次精确值：插值到 1× 时 applyViewZoom 顺手把 transform 摘掉（见 applyViewTransform）
 			this.applyViewZoom(tween.toScale);
 		};
 		this.viewZoomFrame = { win, id: win.requestAnimationFrame(step) };
@@ -760,20 +841,31 @@ export class TextPopupModal extends Modal {
 	}
 
 	/**
-	 * 写视图缩放变量，并在 1× 时把 transform 整个摘掉（去掉 `.is-view-zoomed`）。
+	 * 写视图缩放与平移补偿。
 	 *
-	 * 不能只是把变量写成 `scale(1)`：Chromium 会把「带 transform 的子树」对滚动区的贡献缓存住，
-	 * 2× → 1× 的 scale 变化不会触发重算，滚动区会停在放大后的尺寸（实测点「恢复默认」后
-	 * scrollWidth/scrollHeight 停在 1701 / 7791，而正文只有 1481 / 3992 —— 能滚到正文之外的空白）。
-	 * 摘掉 transform（computed 变 `none`）才会重算。详见 styles.css 与 Report-20260920-155615。
+	 * 1× 时**必须**把 transform 整个摘掉（computed 变 `none`），不能只把 scale 写成 1：Chromium 会把
+	 * 「带 transform 的子树」对滚动区的贡献缓存住，2× → 1× 的 scale 变化不会触发重算，滚动区会停在
+	 * 放大后的尺寸（实测点「恢复默认」后 scrollWidth/scrollHeight 停在 1701 / 7791，而正文只有
+	 * 1481 / 3992 —— 能滚到正文之外的空白）。所以 1× 时连平移一起清零，这总是安全的：回到 1× 的过渡
+	 * 终点是**真实到过的滚动位置**（`viewZoomReturn` 或当前值），补偿本来就收到 0。详见 styles.css 与
+	 * Report-20260920-155615。
 	 *
 	 * 过渡期间由 `animateViewZoom` 每帧用一个中间值调用它：类在插值一开始（scale 刚离开 1）就挂上，
-	 * 一直留到收尾那一帧写回精确的 1 才摘掉 —— 「挂上 / 摘掉」各只发生一次，中间帧只改变量。
+	 * 一直留到收尾那一帧写回精确的 1 才摘掉 —— 「挂上 / 摘掉」各只发生一次，中间帧只改变量与平移。
 	 */
-	private applyViewZoom(scale: number): void {
+	private applyViewTransform(scale: number, pan: ScrollOffset): void {
+		const zoomed = scale !== 1;
 		this.viewZoom = scale;
+		this.viewPan = zoomed ? pan : NO_PAN;
 		this.modalEl.style.setProperty('--text-popup-view-scale', String(scale));
-		this.modalEl.toggleClass('is-view-zoomed', scale !== 1);
+		this.modalEl.style.setProperty('--text-popup-pan-x', `${this.viewPan.left}px`);
+		this.modalEl.style.setProperty('--text-popup-pan-y', `${this.viewPan.top}px`);
+		this.modalEl.toggleClass('is-view-zoomed', zoomed);
+	}
+
+	/** 只改倍数、把平移清掉（「恢复默认」、切换条目、以及不补偿的那些帧都走这条路）。 */
+	private applyViewZoom(scale: number): void {
+		this.applyViewTransform(scale, NO_PAN);
 	}
 
 	/** 结束一次拖拽：清起点与拖拽皮肤。松开空格前仍保持平移待命（光标还是抓手）。 */
