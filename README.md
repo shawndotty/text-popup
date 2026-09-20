@@ -1,3 +1,5 @@
+![Text-Popup.png](https://wafer-1257318448.cos.ap-guangzhou.myqcloud.com/Text-Popup.png)
+
 # Text Popup
 
 把笔记里**可放大的区块**单独放大到弹窗里阅读，交互与 Obsidian 内置的图片放大（lightbox）一致。
