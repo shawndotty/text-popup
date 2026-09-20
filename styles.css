@@ -140,6 +140,32 @@
 	user-select: text;
 }
 
+/* 视图缩放（Alt+Click 放大镜）。用 transform 而不是改字号：改字号会重排（行数变、每个字的位置
+   都变），「点哪儿放大哪儿」就无从谈起；transform 是纯视觉放大，布局一个像素都不动。
+   transform-origin 必须是 0 0 —— 设成点击点的话，点击点左上方的内容会缩到滚动原点之外、
+   永远滚不回来（实测 -181px 不可达，见 Plan-20260920-154434 §4 否决 B）。
+   ① 只在放大时挂上（.is-view-zoomed）：回到 1× 要让 transform 变成 none。Chromium 会把
+      「带 transform 的子树」对滚动区的贡献缓存住，2× → 1× 的 scale 变化不会让它重算 ——
+      实测点控制条「恢复默认」后 scrollWidth/scrollHeight 停在放大后的 1701 / 7791
+      （正文实际只有 1481 / 3992），于是能滚到正文之外的空白、还多出一根横向滚动条；
+      把 transform 摘掉（computed 变 none）才会重算。挂类之后 2× → 1× 的 computed transform
+      从 `matrix(2, …)` 变成 `none`，重算正常（真机实测回到 1481 / 3992）。
+   ② 变量写在 .modal 上（applyViewZoom 那一路），所以 renderBody 每次新建
+      .text-popup-text 都不受影响。 */
+.mod-text-popup.is-view-zoomed .text-popup-text {
+	transform: scale(var(--text-popup-view-scale, 1));
+	transform-origin: 0 0;
+}
+
+/* 空格平移的光标。.is-pan-ready = 按住了空格（可开始拖）；.is-panning = 正在拖。 */
+.mod-text-popup .text-popup-content.is-pan-ready {
+	cursor: grab;
+}
+
+.mod-text-popup .text-popup-content.is-panning {
+	cursor: grabbing;
+}
+
 /* 纯文本模式：保留原样换行 */
 .mod-text-popup .text-popup-text.is-plain {
 	white-space: pre-wrap;

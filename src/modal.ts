@@ -26,6 +26,13 @@ const MERMAID_MAX_FIT = 2;
 const MERMAID_SCALE_MIN = 0.25;
 const MERMAID_SCALE_MAX = 4;
 
+/**
+ * Alt(Option)+Click 放大的倍数。取 2 与 reveal.js 的 zoom 插件默认值一致（见 Plan-20260920-154434 §1），
+ * 硬编码而不做设置项：本插件已有的常量（MERMAID_MAX_FIT、DEFAULT_ZOOM）都是「硬编码 + 注释写明理由」，
+ * 且加开关要动 settings.ts 的四处 + 校验用例，成本远高于功能本身。
+ */
+const CLICK_ZOOM_FACTOR = 2;
+
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
@@ -51,6 +58,46 @@ export function headingColorVariables(style: {
 		if (value) variables.push([name, value]);
 	}
 	return variables;
+}
+
+/**
+ * Alt+Click 的目标倍数：未放大 → factor，已放大 → 回到 1。
+ * 与 reveal.js zoom 插件的 `to()` / `out()` 同语义（已放大时再点即退出）。
+ */
+export function clickZoomTarget(current: number, factor: number): number {
+	return current === 1 ? factor : 1;
+}
+
+/**
+ * 鼠标位置 → 缩放层（`.text-popup-text`）内的坐标。
+ *
+ * 不用自己减内边距 / 算 `margin: auto` 的偏移：`transform-origin: 0 0` 时缩放后的包围盒
+ * 左上角与缩放前重合，所以 `getBoundingClientRect()` 给的 left/top 就是元素的未缩放原点，
+ * 除以当前倍数即还原到元素本地坐标（见 Plan-20260920-154434 §3.3）。
+ */
+export function elementPoint(
+	clientX: number,
+	clientY: number,
+	rect: { left: number; top: number },
+	scale: number,
+): { x: number; y: number } {
+	return { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale };
+}
+
+/**
+ * 让点击处停在屏幕原位的滚动补偿量：Δ = (s₂ − s₁) · p。
+ *
+ * 推导：元素内坐标 p 的点，屏幕横坐标 = `rect.left + s·p`，而 `rect.left` 只随滚动线性变化
+ * （transform-origin 在 0 0，缩放不改包围盒左上角）—— 令缩放前后屏幕坐标相等即得上式。
+ * 正值 = 内容被放大后要往右 / 往下多滚，才能让点击点留在原处。
+ */
+export function zoomScrollDelta(
+	current: number,
+	next: number,
+	point: { x: number; y: number },
+): { left: number; top: number } {
+	const k = next - current;
+	return { left: k * point.x, top: k * point.y };
 }
 
 /** 单个条目的内容。 */
@@ -87,6 +134,7 @@ export interface TextPopupSource {
  * - 标题栏显示来源笔记名，便于溯源；同一笔记有多个被标记块时附带「当前 / 总数」序号。
  * - 用 ← / → 在同一个笔记的全部被标记块之间切换，环绕规则与内置图片 lightbox 一致。
  * - 底部控制条提供字号与缩放；只影响本次弹窗，不写回设置。
+ * - `Alt(Option)+Click` 以点击处为锚放大（再点还原），放大后按住空格可拖拽平移。
  * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
  */
 export class TextPopupModal extends Modal {
@@ -107,6 +155,26 @@ export class TextPopupModal extends Modal {
 	private mermaidObserver: MutationObserver | null = null;
 	/** 弹窗铺满窗口，窗口尺寸变了 fit 就过期；存成字段才能在 onClose 里解绑。 */
 	private resizeHandler = (): void => this.fitMermaid();
+	/**
+	 * 视图缩放（Alt+Click 放大镜），与字号无关的纯视觉放大，1 = 原始大小。
+	 * 与字号 / 缩放是相乘关系：字号仍然照旧重排，这一层是叠在上面的 transform。
+	 */
+	private viewZoom = 1;
+	/**
+	 * 进入放大前的滚动位置。再点一下还原时写回去 —— 「刚才看到哪儿」比「放大到哪儿」更重要，
+	 * 而放大期间浏览器会把 scrollTop 夹在新范围内，不写回就回不到原位。
+	 */
+	private viewZoomReturn: { left: number; top: number } | null = null;
+	/** 空格是否按住（平移待命）。 */
+	private spaceDown = false;
+	/** 正在拖拽平移时的起点；非空 = 正在拖（也用来给文档级 pointermove 做门禁）。 */
+	private panOrigin: {
+		pointerId: number;
+		x: number;
+		y: number;
+		left: number;
+		top: number;
+	} | null = null;
 
 	constructor(
 		app: App,
@@ -118,6 +186,78 @@ export class TextPopupModal extends Modal {
 		this.fontSize = settings.popupFontSize;
 		this.index = startIndex;
 	}
+
+	/**
+	 * Alt+Click 的按下态压掉（不压的话会开始拖选文字）。
+	 *
+	 * 真正的开关在 `onClick` 里，不在 mousedown 上：正文里的 `[[链接]]` 跳转由核心的 `click`
+	 * 处理器负责生效，只在 mousedown 上拦挡不住它。
+	 */
+	private onMouseDown = (evt: MouseEvent): void => {
+		if (evt.altKey && evt.button === 0) evt.preventDefault();
+	};
+
+	/** 只认 Alt(Option) + 左键。监听挂在 `.text-popup-content` 上，所以控制条的 Alt+Click 不会被误伤。 */
+	private onClick = (evt: MouseEvent): void => {
+		if (!evt.altKey || evt.button !== 0) return;
+		// preventDefault 压掉链接跳转 / 其它默认行为，stopPropagation 拦住冒泡到核心的点击处理器
+		evt.preventDefault();
+		evt.stopPropagation();
+		this.toggleClickZoom(evt.clientX, evt.clientY);
+	};
+
+	/**
+	 * 空格按下：进入平移待命。
+	 *
+	 * 用**文档级** keydown/keyup 而不是 Modal 的 scope —— scope 只有 keydown，
+	 * 收不到「松开空格」，而平移必须在松手时结束。
+	 */
+	private onKeyDown = (evt: KeyboardEvent): void => {
+		if (evt.key !== ' ' || evt.repeat || evt.defaultPrevented) return;
+		if (this.isControlTarget(evt.target)) return; // 焦点在控制条按钮上时，空格是「激活按钮」
+		evt.preventDefault(); // 压掉空格的翻页滚动
+		this.spaceDown = true;
+		this.scrollEl.addClass('is-pan-ready');
+	};
+
+	private onKeyUp = (evt: KeyboardEvent): void => {
+		if (evt.key !== ' ') return;
+		this.endPanReady();
+	};
+
+	/** 按住空格时切窗口，keyup 永远不会来 —— 靠窗口失焦收口。 */
+	private onWindowBlur = (): void => this.endPanReady();
+
+	private onPointerDown = (evt: PointerEvent): void => {
+		if (!this.spaceDown || evt.button !== 0) return;
+		this.panOrigin = {
+			pointerId: evt.pointerId,
+			x: evt.clientX,
+			y: evt.clientY,
+			left: this.scrollEl.scrollLeft,
+			top: this.scrollEl.scrollTop,
+		};
+		this.scrollEl.addClass('is-panning');
+		evt.preventDefault(); // 压掉拖选文字与原生拖拽
+	};
+
+	private onPointerMove = (evt: PointerEvent): void => {
+		const origin = this.panOrigin;
+		if (!origin || origin.pointerId !== evt.pointerId) return;
+		// 鼠标往哪边拖，内容就往哪边走 → 滚动位置往反方向走
+		this.scrollEl.scrollLeft = origin.left - (evt.clientX - origin.x);
+		this.scrollEl.scrollTop = origin.top - (evt.clientY - origin.y);
+	};
+
+	private onPointerUp = (evt: PointerEvent): void => {
+		if (this.panOrigin?.pointerId !== evt.pointerId) return;
+		this.endPan();
+	};
+
+	private onPointerCancel = (evt: PointerEvent): void => {
+		if (this.panOrigin?.pointerId !== evt.pointerId) return;
+		this.endPan();
+	};
 
 	onOpen(): void {
 		this.modalEl.addClass('mod-text-popup');
@@ -152,6 +292,20 @@ export class TextPopupModal extends Modal {
 		// 弹窗铺满窗口，窗口尺寸变了 fit 就过期
 		activeWindow.addEventListener('resize', this.resizeHandler);
 
+		// 视图缩放（Alt+Click）与空格平移：都只挂正文区，控制条 / 标题栏不受影响。
+		this.scrollEl.addEventListener('mousedown', this.onMouseDown);
+		this.scrollEl.addEventListener('click', this.onClick);
+		this.scrollEl.addEventListener('pointerdown', this.onPointerDown);
+		// 拖拽要在鼠标移出弹窗 / 移出窗口后继续收事件 → 移动与结束挂文档级。
+		// 不调 setPointerCapture：它是给「鼠标移出窗口后还要继续收事件」用的，而鼠标按住时
+		// 浏览器本来就会把事件继续投递给文档；且合成事件下它会抛 NotFoundError（见 Plan §3.4）。
+		activeDocument.addEventListener('pointermove', this.onPointerMove);
+		activeDocument.addEventListener('pointerup', this.onPointerUp);
+		activeDocument.addEventListener('pointercancel', this.onPointerCancel);
+		activeDocument.addEventListener('keydown', this.onKeyDown);
+		activeDocument.addEventListener('keyup', this.onKeyUp);
+		activeWindow.addEventListener('blur', this.onWindowBlur);
+
 		this.buildControls(this.contentEl);
 		this.updateSize();
 
@@ -160,6 +314,18 @@ export class TextPopupModal extends Modal {
 
 	onClose(): void {
 		this.component.unload();
+		// 视图缩放 / 平移的监听同样属于「弹窗存续期间」的资源，逐一解绑
+		this.scrollEl.removeEventListener('mousedown', this.onMouseDown);
+		this.scrollEl.removeEventListener('click', this.onClick);
+		this.scrollEl.removeEventListener('pointerdown', this.onPointerDown);
+		activeDocument.removeEventListener('pointermove', this.onPointerMove);
+		activeDocument.removeEventListener('pointerup', this.onPointerUp);
+		activeDocument.removeEventListener('pointercancel', this.onPointerCancel);
+		activeDocument.removeEventListener('keydown', this.onKeyDown);
+		activeDocument.removeEventListener('keyup', this.onKeyUp);
+		activeWindow.removeEventListener('blur', this.onWindowBlur);
+		// 平移待命的皮肤（is-pan-ready / is-panning）也要清掉，别留在节点上
+		this.endPanReady();
 		this.contentEl.empty();
 		// 观察器与窗口监听都属于「弹窗存续期间」的资源，关窗必须解绑，否则会跟着窗口一直留着
 		this.mermaidObserver?.disconnect();
@@ -213,6 +379,9 @@ export class TextPopupModal extends Modal {
 		// 从长块切到长块时，浏览器不会自动回到顶部，必须显式复位
 		this.scrollEl.scrollTop = 0;
 		this.scrollEl.scrollLeft = 0;
+		// 视图缩放的锚点属于上一块内容，不复用；同理上一块的「还原位置」也作废
+		this.applyViewZoom(1);
+		this.viewZoomReturn = null;
 		this.updateTitle();
 		void this.renderBody(body);
 	}
@@ -362,7 +531,83 @@ export class TextPopupModal extends Modal {
 	private resetSize(): void {
 		this.fontSize = this.settings.popupFontSize;
 		this.zoom = DEFAULT_ZOOM;
+		// 「恢复默认」要名副其实：字号、缩放、视图缩放三者全复原
+		this.applyViewZoom(1);
+		this.viewZoomReturn = null;
 		this.updateSize();
+	}
+
+	/**
+	 * Alt+Click：未放大时以点击点为锚放大，已放大时还原到进入前的位置。
+	 *
+	 * 点击点坐标用 `getBoundingClientRect()` 现算，而不是自己累加内边距 / `margin: auto` 的偏移：
+	 * `transform-origin: 0 0` 下缩放后的包围盒左上角与缩放前重合，所以 rect 的 left/top 就是
+	 * 元素的未缩放原点（见 elementPoint）。
+	 */
+	private toggleClickZoom(clientX: number, clientY: number): void {
+		const current = this.viewZoom;
+		const next = clickZoomTarget(current, CLICK_ZOOM_FACTOR);
+
+		if (current === 1) {
+			// 先记下「放大前看到哪儿」，再动 scale
+			this.viewZoomReturn = { left: this.scrollEl.scrollLeft, top: this.scrollEl.scrollTop };
+			const rect = this.textEl?.getBoundingClientRect();
+			const point = rect ? elementPoint(clientX, clientY, rect, current) : { x: 0, y: 0 };
+			// 顺序不能反：先写 scale 变量，再写滚动量。反过来的话赋值会被夹在旧的（未放大）上限上，
+			// 锚点漂移。不额外强制布局 —— 实测在中间插一次 `void scrollWidth` 对结果没有任何影响。
+			// 残余误差 ≤ 1.3px，来自浏览器把滚动位置按设备像素对齐（本机 DPR 1.728、1 设备像素 =
+			// 0.58px，实测落到比目标少 2 个设备像素）；同一个目标值晚一步再写会落到 0.23px 以内，
+			// 说明算式本身没有偏差。详见 Report-20260920-155615。所以这里保持最简的写法。
+			this.applyViewZoom(next);
+			const delta = zoomScrollDelta(current, next, point);
+			this.scrollEl.scrollLeft += delta.left;
+			this.scrollEl.scrollTop += delta.top;
+			return;
+		}
+
+		this.applyViewZoom(next);
+		const back = this.viewZoomReturn;
+		this.viewZoomReturn = null;
+		if (back) {
+			// 从 2× 回到 1× 不需要算补偿：写回进入前的位置即可（浏览器自己会把越界值夹回范围内）
+			this.scrollEl.scrollLeft = back.left;
+			this.scrollEl.scrollTop = back.top;
+		}
+	}
+
+	/**
+	 * 写视图缩放变量，并在 1× 时把 transform 整个摘掉（去掉 `.is-view-zoomed`）。
+	 *
+	 * 不能只是把变量写成 `scale(1)`：Chromium 会把「带 transform 的子树」对滚动区的贡献缓存住，
+	 * 2× → 1× 的 scale 变化不会触发重算，滚动区会停在放大后的尺寸（实测点「恢复默认」后
+	 * scrollWidth/scrollHeight 停在 1701 / 7791，而正文只有 1481 / 3992 —— 能滚到正文之外的空白）。
+	 * 摘掉 transform（computed 变 `none`）才会重算。详见 styles.css 与 Report-20260920-155615。
+	 */
+	private applyViewZoom(scale: number): void {
+		this.viewZoom = scale;
+		this.modalEl.style.setProperty('--text-popup-view-scale', String(scale));
+		this.modalEl.toggleClass('is-view-zoomed', scale !== 1);
+	}
+
+	/** 结束一次拖拽：清起点与拖拽皮肤。松开空格前仍保持平移待命（光标还是抓手）。 */
+	private endPan(): void {
+		this.panOrigin = null;
+		this.scrollEl.removeClass('is-panning');
+	}
+
+	/** 退出平移待命：松开空格 / 窗口失焦 / 关窗时调用，拖拽中也会一并结束。 */
+	private endPanReady(): void {
+		this.spaceDown = false;
+		this.panOrigin = null;
+		this.scrollEl.removeClass('is-pan-ready', 'is-panning');
+	}
+
+	/**
+	 * 焦点是否在控制条里。控制条的按钮自己绑了 keydown（空格 / 回车 = 激活按钮，
+	 * 见 createControlButton），此时空格不能抢成平移待命。
+	 */
+	private isControlTarget(target: EventTarget | null): boolean {
+		return target instanceof HTMLElement && target.closest('.text-popup-controls') !== null;
 	}
 
 	/** 缩放以倍数作用于字号，因此内容始终自然重排，不会出现被裁切的情况。 */
