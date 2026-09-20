@@ -8,7 +8,8 @@
  * 第 5 类 `image` 是唯一**不**走 `.cm-embed-block` 的：核心给图片 widget 自己建的容器是
  * `div.image-embed`（`addActions` 由编辑器 widget 的 `initDOM` 调用，在容器内建同一套
  * `.embed-actions`）。所以它照样有原生「放大」图标、照样算一条候选，只是注入锚点不同
- * （见 scanner/shared.ts 的 `IMAGE_SELECTOR`）。
+ * （见 scanner/shared.ts 的 `IMAGE_SELECTOR`）。它另有四条**行级排除**（缩进 / 表格 /
+ * 行内 HTML / 行内代码），判据都是「实测核心不给这种写法建 `.image-embed`」。
  *
  * 第 6 类 `quote`（普通 Markdown 引用块 `> …`）是唯一**既没有容器、也没有原生图标**的一类：
  * 实时预览里它只是一串 `.cm-line.HyperMD-quote`（实测普通引用行上一条 `.cm-embed-block`
@@ -230,12 +231,94 @@ function matchQuoteBlock(lines: readonly string[], start: number): BlockMatch | 
 }
 
 /**
+ * 一行里被行内代码（反引号）覆盖的字符区间 `[start, end)`，按位置升序、互不重叠。
+ * 四条规则全来自真机实测（见 Plan-20260920-101324 §2.2）：
+ * 1. 反引号串 = 连续 n 个 `` ` ``；开启一段代码，找到**长度相同**的下一串就在那里闭合
+ *    （与 CommonMark 一致）。
+ * 2. 同一行里找不到等长的那一串时，这一段**一直延伸到行尾** —— 这是 Live Preview 特有的，
+ *    未闭合的反引号也当代码（实测 `` `abc ![[x]] `` 整段是 `span.cm-inline-code`，
+ *    没有 `.image-embed`）。注意阅读视图相反：那里反引号是字面文本、图会显示出来。
+ * 3. 前面有**奇数个**反斜杠的反引号被转义，不参与（实测 `` \` ![[x]] `` 里的图照常出）。
+ * 4. 代码段**不跨行**（实测 `` `abc `` 的下一行 `![[x]]` 照常出图）—— 所以逐行判断是完备的。
+ *
+ * 只回答「这一段字符是不是代码」，不做 markdown-it 那样的嵌套 / 转义还原：
+ * 这里是「判断位置」，不是「解析内容」。
+ */
+function inlineCodeRanges(line: string): Array<[number, number]> {
+	const ranges: Array<[number, number]> = [];
+	let index = 0;
+	while (index < line.length) {
+		if (line[index] !== '`') {
+			index += 1;
+			continue;
+		}
+		// 奇数个反斜杠 = 被转义；偶数个是「转义的反斜杠 + 一个真反引号」
+		let slashes = 0;
+		while (line[index - 1 - slashes] === '\\') slashes += 1;
+		if (slashes % 2 === 1) {
+			index += 1;
+			continue;
+		}
+
+		let open = 0;
+		while (line[index + open] === '`') open += 1;
+
+		// 规则 2：默认吃到行尾；找到等长闭合串就收在那里
+		let cursor = index + open;
+		let end = line.length;
+		while (cursor < line.length) {
+			if (line[cursor] !== '`') {
+				cursor += 1;
+				continue;
+			}
+			let run = 0;
+			while (line[cursor + run] === '`') run += 1;
+			if (run === open) {
+				end = cursor + open;
+				break;
+			}
+			cursor += run;
+		}
+
+		ranges.push([index, end]);
+		index = end; // 跳到这一段之后：天然不嵌套、不重叠
+	}
+	return ranges;
+}
+
+/**
+ * 取这一行里第一个**不在行内代码区间内**的匹配（找不到返回 null）。
+ *
+ * 为什么是「跳过」而不是「一旦在代码里就整行放弃」：同一行里「代码里的图 + 后面的真图」是
+ * 合法写法，后面的真图**有 `.image-embed`、有放大图标**（真机实测）。整行放弃会让那张真图的
+ * 图标点开时定位不到候选 —— `locateStartIndex` 对不上就**不开弹窗**，等于把「能翻到却没图标」
+ * 的幽灵换成「有图标却点不开」的另一种幽灵。
+ */
+function firstHitOutsideCode(
+	line: string,
+	re: RegExp,
+	ranges: ReadonlyArray<[number, number]>,
+): RegExpExecArray | null {
+	const global = new RegExp(re.source, 'g'); // WIKI_EMBED / MD_IMAGE 不带 g，这里要全局找
+	for (let match = global.exec(line); match; match = global.exec(line)) {
+		// 先提出成 const：闭包里对 let 的收窄不生效（`match` 在回调里会是 `RegExpExecArray | null`）
+		const at = match.index;
+		if (!ranges.some(([start, end]) => at >= start && at < end)) return match;
+	}
+	return null;
+}
+
+/**
  * 图片：单行区间。
  *
- * 三条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
+ * 四条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
  * 但永远没有图标」的幽灵条目）：4 空格缩进会被当成缩进代码块；表格由 `.cm-table-widget`
  * 自己画、单元格里根本没有 `.image-embed`；行内 HTML widget 里的图片是 `span` 且没有
- * `.embed-actions`。
+ * `.embed-actions`；**行内代码**里的图片在 LP 里只是一段文字（实测 `span.cm-inline-code`，
+ * 没有 `.image-embed`）—— 这四条是同一族。
+ *
+ * 行内代码那条要在**取出图片语法之前**先算区间：反引号本身在 LP 的 DOM 里是被隐藏的格式符，
+ * 文本扫描器看不到「这里被反引号包着」，只能自己按 `inlineCodeRanges` 的规则算。
  *
  * 行内 HTML 那条要在**取出图片语法之后**再判：`![x](<带空格.png>)` 的角括号是 CommonMark
  * 允许的 target 写法，核心照样给它在 `.cm-line` 里建 `div.image-embed` + `.embed-actions`
@@ -249,8 +332,9 @@ function matchImageBlock(lines: readonly string[], start: number): BlockMatch | 
 	if (/^ {4,}/.test(line)) return null;
 	if (line.trimStart().startsWith('|')) return null;
 
-	const wiki = WIKI_EMBED.exec(line);
-	const md = wiki ? null : MD_IMAGE.exec(line);
+	const ranges = inlineCodeRanges(line);
+	const wiki = firstHitOutsideCode(line, WIKI_EMBED, ranges);
+	const md = wiki ? null : firstHitOutsideCode(line, MD_IMAGE, ranges);
 	const target = wiki ? wikiImageTarget(wiki[1] ?? '') : md ? pathImageTarget(md[1] ?? '') : null;
 	const hit = wiki ?? md;
 	if (!target || !hit) return null;

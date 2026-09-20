@@ -206,6 +206,61 @@ test('实测没有 .image-embed 的四种写法不产图片区间', () => {
 	assert.deepEqual(outline('- ![x](p.png)\n  - ![y](q.png)'), ['image:0-0', 'image:1-1'], '列表行仍算');
 });
 
+// —— 图片 · 行内代码里的图片（V114 新增的第四条行级排除）——
+//
+// 判据同样是「实测没有 `.image-embed`」：`` `![[x]]` `` 在 LP 里只是 `span.cm-inline-code`。
+// 反引号本身在 LP 的 DOM 里被隐藏，文本扫描器看不到，因此由 `inlineCodeRanges` 按四条实测
+// 规则算出代码区间（等长闭合 / 未闭合吃到行尾 / 奇偶反斜杠决定转义 / 不跨行）。
+// 下面是「该排除的」与「不该被误伤的」两半 —— 后者是防止从一个幽灵变成另一个幽灵。
+
+test('行内代码里的图片语法一律不产候选（夹在文字 / 列表 / 标题里也一样）', () => {
+	assert.deepEqual(outline('`![x](p.png)`'), [], '行内 Markdown 图片');
+	assert.deepEqual(outline('`![[p.png]]`'), [], '行内 wiki 嵌入');
+	assert.deepEqual(outline('``![x](p.png)``'), [], '双反引号包裹');
+	assert.deepEqual(outline('前 `![x](p.png)` 后'), [], '夹在正文里');
+	assert.deepEqual(outline('- `![x](p.png)`'), [], '列表行');
+	assert.deepEqual(outline('## `![x](p.png)`'), [], '标题行');
+	assert.deepEqual(outline('` ![x](p.png)'), [], '反引号后紧跟空格');
+});
+
+test('未闭合的反引号按 LP 处理：整段到行尾都算代码', () => {
+	// 实测 `span.cm-inline-code` 覆盖到行尾、没有 .image-embed（阅读视图相反，见 README 已知限制）
+	assert.deepEqual(outline('`![x](p.png)'), [], '未闭合');
+	assert.deepEqual(outline('`abc ![x](p.png) def'), [], '未闭合 + 后文');
+	assert.deepEqual(outline('`a`` ![x](p.png)'), [], '1 个开、2 个闭：长度不等，未闭合');
+	assert.deepEqual(outline('``a` ![x](p.png)'), [], '2 个开、1 个闭：长度不等，未闭合');
+});
+
+test('反引号前的反斜杠按奇偶判转义（仅奇数个算被转义）', () => {
+	// 奇数个：反引号被转义、不是代码段起点，图片照常成条
+	assert.deepEqual(outline('\\`![x](p.png)'), ['image:0-0'], '1 个反斜杠');
+	// 偶数个：`\\` 先被还原成一个字面反斜杠，反引号仍是真定界符、图片落在代码段里
+	assert.deepEqual(outline('\\\\`![x](p.png)`'), [], '2 个反斜杠');
+});
+
+test('代码段在图片之前闭合、或根本不在这一行时，图片照常成条', () => {
+	assert.deepEqual(outline('`a` ![x](p.png)'), ['image:0-0'], '代码在前、图片在后');
+	assert.deepEqual(outline('`a` ![x](p.png) `b`'), ['image:0-0'], '图片夹在两段代码之间');
+	// 规则 4：代码段不跨行 —— 上一行的反引号不会把这一行的图吃掉
+	assert.deepEqual(outline('`abc\n![x](p.png)'), ['image:1-1'], '跨行不生效');
+});
+
+test('同一行「代码里的图 + 后面的真图」只认真图那条（防反向幽灵）', () => {
+	const regions = scanTextBlocks('`![[a.png]]` 然后 ![[b.png]]');
+	assert.deepEqual(
+		regions.map((region) => `${region.kind}:${region.startLine}-${region.endLine}`),
+		['image:0-0'],
+		'真图仍是一条候选',
+	);
+	assert.equal(regions[0]?.raw, '![[b.png]]', 'raw 是那张真图，而不是代码里那张');
+});
+
+test('一行两张真图的口径不变：仍只取第一张', () => {
+	const regions = scanTextBlocks('![x](a.png) ![y](b.png)');
+	assert.deepEqual(outline('![x](a.png) ![y](b.png)'), ['image:0-0']);
+	assert.equal(regions[0]?.raw, '![x](a.png)');
+});
+
 test('Callout / 围栏 / HTML 块体内的图片被外层吞掉，总数不变', () => {
 	assert.deepEqual(
 		outline('> [!note]\n> ![x](p.png)'),
