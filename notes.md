@@ -1,3 +1,1 @@
-- add suport for quotes block
-- change styles
-- fix inline codeblock embeded image render bug
+- use Obsidian new setting API for the setting page
