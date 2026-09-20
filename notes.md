@@ -1,1 +1,1 @@
-- use Obsidian new setting API for the setting page
+- add zoom in and zoom out feature in popup window
