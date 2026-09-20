@@ -1,1 +1,1 @@
-- add support for images popup
+- refactor code
