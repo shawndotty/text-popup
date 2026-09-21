@@ -20,7 +20,8 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { isBlockLevelTag, scanTextBlocks } = await jiti.import('../src/blocks.ts');
+const { indentColumns, isBlockLevelTag, isCodeIndent, isIndentedCode, isIndentedCodeContinuation, scanTextBlocks } =
+	await jiti.import('../src/blocks.ts');
 // 表格的互验对象：扫描器的 table 区间必须等于 `matchTable` 的 `[start, end - 1]`
 const { matchTable } = await jiti.import('../src/convert/forward-table.ts');
 
@@ -88,6 +89,17 @@ test('script 不在块级标签表里，因此整段不产区间', () => {
 	assert.deepEqual(outline('<script>\nvar a = 1;\n</script>'), []);
 });
 
+test('HTML 块的缩进按容器判（V118）：列表项内的 4 空格照样有 .cm-html-embed', () => {
+	// 真机实测：`- 父项` + 4 空格 `<div>` 有 `.cm-html-embed.cm-embed-block`（+ 插件图标）；
+	// 另外三种的整段是 `cm-hmd-indented-code`，没有 widget
+	assert.deepEqual(outline('- 父项\n    <div>x</div>'), ['html:1-1'], '列表项内 4 空格（相对 2 列）');
+	assert.deepEqual(outline('- 父项\n\t<div>x</div>'), ['html:1-1'], 'Tab 缩进');
+	assert.deepEqual(outline('段落\n    <div>x</div>'), ['html:1-1'], '段落延续 + 4 空格');
+	assert.deepEqual(outline('\n    <div>x</div>'), [], '空行后 + 4 空格 = 缩进代码块');
+	assert.deepEqual(outline('    x\n    <div>x</div>'), [], '紧接缩进代码行');
+	assert.deepEqual(outline('- 父项\n\n      <div>x</div>'), [], '列表项内空行 + 6 空格（相对 4）');
+});
+
 // —— 围栏代码块 ——
 
 test('未闭合的围栏吃到文末', () => {
@@ -116,6 +128,33 @@ test('4 空格缩进的围栏属于缩进代码块，不是候选', () => {
 	assert.deepEqual(outline('    ```\na\n    ```'), []);
 });
 
+test('围栏的缩进按容器判（V118）：列表项内的 4 空格是正常嵌套，顶格 4 空格才是代码块', () => {
+	// 真机实测：列表项内 4 空格缩进的 ```js 有 `.code-block-flair`（+ 本插件图标）、
+	// mermaid 那格还建出 `.cm-preview-code-block` widget；另外三种没有 chip、也没有 widget
+	assert.deepEqual(
+		outline('- 父项\n    ```js\n    const a = 1;\n    ```'),
+		['code:1-3'],
+		'列表项内 4 空格（相对 2 列）',
+	);
+	assert.deepEqual(
+		outline('- 父项\n    ```mermaid\n    graph TD; a-->b;\n    ```'),
+		['code:1-3'],
+		'mermaid 同样成条',
+	);
+	assert.deepEqual(
+		outline('- 父项\n\t```js\n\tconst a = 1;\n\t```'),
+		['code:1-3'],
+		'Tab 缩进',
+	);
+	assert.deepEqual(
+		outline('段落\n    ```js\n    const a = 1;\n    ```'),
+		[],
+		'段落延续 + 4 空格：围栏可以打断段落，这里确实是缩进代码块',
+	);
+	assert.deepEqual(outline('- 父项\n\n      ```js\n      const a = 1;\n      ```'), [], '列表项内 6 空格（相对 4）');
+	assert.deepEqual(outline('```js\na\n    ```\nb\n```'), ['code:0-4'], '闭围栏也按容器判：4 空格那行不闭合顶格围栏');
+});
+
 // —— 数学块 ——
 
 test('同一行里出现第二个 $$ 就当场结束', () => {
@@ -128,6 +167,25 @@ test('跨行的 $$ 到含 $$ 的那一行结束', () => {
 
 test('行内公式 $x$ 不命中数学块', () => {
 	assert.deepEqual(outline('$x$'), []);
+});
+
+test('$$ 的缩进几乎不影响成条（V118）：能打断段落、也能在空行后另起块', () => {
+	// 真机实测：下面每一格都建出了 `math-block.cm-embed-block`（带 `.embed-actions` + 插件图标）
+	assert.deepEqual(outline('\n    $$\n    m=1\n    $$'), ['math:1-3'], '顶格容器 4 空格');
+	assert.deepEqual(outline('\n      $$ m=2 $$'), ['math:1-1'], '顶格容器 6 空格（单行）');
+	assert.deepEqual(outline('- 父项\n    $$\n    m=3\n    $$'), ['math:1-3'], '列表项内 4 空格');
+	assert.deepEqual(outline('- 父项\n\n      $$\n      m=4\n      $$'), ['math:2-4'], '列表项内空行 + 6 空格');
+	assert.deepEqual(outline('- 父项\n          $$ m=5 $$'), ['math:1-1'], '列表项内 10 空格 (单行)');
+	assert.deepEqual(outline('- 父项\n\t$$\n\tm=6\n\t$$'), ['math:1-3'], 'Tab 缩进');
+	assert.deepEqual(outline('段落\n      $$ m=7 $$'), ['math:1-1'], '段落延续 + 6 空格');
+});
+
+test('$$ 唯一被吞掉的情况：上一行本身就是缩进行（已在跑的缩进代码块）', () => {
+	// 真机实测：这两行整段是 `cm-hmd-indented-code`，没有 `.math-block`
+	assert.deepEqual(outline('    x\n    $$ m=1 $$'), [], '紧接缩进代码行');
+	assert.deepEqual(outline('- 父项\n    x\n    $$ m=2 $$'), ['math:2-2'], '列表项内的「相对 2 列」不是代码块');
+	// 空行**不**终结：`    x` + 空行 + `    $$` 实测是 math，不是代码块（与图片那侧相反）
+	assert.deepEqual(outline('    x\n\n    $$ m=3 $$'), ['math:2-2'], '空行之后另起块');
 });
 
 // —— Callout ——
@@ -202,10 +260,108 @@ test('非图片的嵌入不算图片区间（扩展名不在图片表里）', ()
 });
 
 test('实测没有 .image-embed 的四种写法不产图片区间', () => {
-	assert.deepEqual(outline('    ![x](p.png)'), [], '4 空格缩进 = 缩进代码块');
+	assert.deepEqual(outline('    ![x](p.png)'), [], '顶格 4 空格（前面没有段落）= 缩进代码块');
 	assert.deepEqual(outline('| ![x](p.png) | y |'), [], '表格单元格');
 	assert.deepEqual(outline('前 <span>![x](p.png)</span> 后'), [], '行内 HTML widget');
-	assert.deepEqual(outline('- ![x](p.png)\n  - ![y](q.png)'), ['image:0-0', 'image:1-1'], '列表行仍算');
+	assert.deepEqual(
+		outline('- ![x](p.png)\n  - ![y](q.png)\n    - ![z](r.png)'),
+		['image:0-0', 'image:1-1', 'image:2-2'],
+		'列表行仍算（2 空格与 **4 空格** 两级嵌套，V118 补：4 空格那级原来被误判成代码块）',
+	);
+});
+
+// —— 图片 · 相对容器的缩进（V118 的行为变更）——
+//
+// 起因：`碎片笔记-20260921-204234` 里三处图片，只有 Tab 缩进那处点得开。根因是守卫写成
+// `/^ {4,}/`（数行首空格），而缩进代码块的真实判据是**相对容器**的。
+//
+// 下面这张 9 写法矩阵是**真机量出来的事实**（探针笔记整篇滚进视口后读 `.image-embed`），
+// 判据就是照它定的；每一行的注释写的是核心的真实行为，不是推导：
+//
+//   | # | 写法 | 缩进(列) | 容器内容列 | 核心建 .image-embed |
+//   | t1 | 段落行 + 4 空格图 | 4 | 0 | 有（段落延续，不是代码块）|
+//   | t2 | `- 父项` + 4 空格 `- ![t2]` | 4 | 2 | 有（← 本次 bug 那一格）|
+//   | t3 | `- 父项` + 4 空格 `![t3]`（无标记）| 4 | 2 | 有 |
+//   | t4 | `1. 有序父项` + 4 空格 `- ![t4]` | 4 | 3 | 有 |
+//   | t5 | `- 父项` + 3 空格 `- ![t5]` | 3 | 2 | 有 |
+//   | t6 | `- 父项` + Tab `- ![t6]` | 4 | 2 | 有 |
+//   | t7 | `- 父项` + 空行 + 6 空格图 | 6 | 2 | **没有**（相对容器满 4 列 = 代码块）|
+//   | t8 | `- 父项` + Tab `![t8]` | 4 | 2 | 有 |
+//   | t9 | `- 父项` + 2 空格 `- ![t9]` | 2 | 2 | 有 |
+
+test('9 写法矩阵：只有「相对容器满 4 列」的那格不产候选（真机逐格量过）', () => {
+	const matrix = [
+		['段落行\n    ![t1](t1.png)', ['image:1-1'], 't1 段落延续 + 4 空格'],
+		['- 父项\n    - ![t2](t2.png)', ['image:1-1'], 't2 列表 + 4 空格（本次 bug）'],
+		['- 父项\n    ![t3](t3.png)', ['image:1-1'], 't3 列表 + 4 空格（无列表标记）'],
+		['1. 有序父项\n    - ![t4](t4.png)', ['image:1-1'], 't4 有序列表（容器列 3）'],
+		['- 父项\n   - ![t5](t5.png)', ['image:1-1'], 't5 列表 + 3 空格'],
+		['- 父项\n\t- ![t6](t6.png)', ['image:1-1'], 't6 列表 + Tab'],
+		['- 父项\n\n      ![t7](t7.png)', [], 't7 列表 + 空行 + 6 空格（相对 4 = 代码块）'],
+		['- 父项\n\t![t8](t8.png)', ['image:1-1'], 't8 列表 + Tab（无列表标记）'],
+		['- 父项\n  - ![t9](t9.png)', ['image:1-1'], 't9 列表 + 2 空格'],
+	];
+	for (const [text, expected, label] of matrix) {
+		assert.deepEqual(outline(text), expected, label);
+	}
+});
+
+test('缩进代码块「续行」也算代码块：上一行是缩进行时不再成条（防反向幽灵）', () => {
+	// 真机实测：这三行的整段都是 `cm-hmd-indented-code`，没有 `.image-embed`
+	assert.deepEqual(outline('    x\n    ![i](p.png)'), [], '上一篇缩进行之后');
+	assert.deepEqual(outline('    x\n\n    ![i](p.png)'), [], '空行不终结缩进代码块');
+	// 反过来：列表项内的「相对 2 列」不是代码块，照常成条
+	assert.deepEqual(outline('- 父项\n    x\n    ![i](p.png)'), ['image:2-2'], '列表项内两行之后');
+});
+
+test('碎片笔记-20260921-204234 的三处形状：Tab 与 4 空格都各成一条候选', () => {
+	// 原样复刻那篇笔记的三处（Tab / 4 空格 / 4 空格），修复前只有第 1 条
+	const text = [
+		'- IOTO Framework Settings插件',
+		'\t- ![505](https://x/a.png)',
+		'',
+		'- IOTO Framework Settings插件',
+		'    - ![505](https://x/a.png)',
+		'',
+		'- IOTO Framework Settings插件',
+		'    - ![505](https://x/a.png)',
+	].join('\n');
+	assert.deepEqual(outline(text), ['image:1-1', 'image:4-4', 'image:7-7']);
+});
+
+// —— 缩进判据本身（V118 新增的原语）——
+
+test('indentColumns 按 tab stop 展开（不是数空格）', () => {
+	assert.equal(indentColumns(''), 0);
+	assert.equal(indentColumns('x'), 0);
+	assert.equal(indentColumns('   x'), 3);
+	assert.equal(indentColumns('\tx'), 4, '一个 Tab = 4 列');
+	assert.equal(indentColumns(' \tx'), 4, '空格 + Tab 补到下一个 tab stop');
+	assert.equal(indentColumns('  \tx'), 4);
+	assert.equal(indentColumns('    \tx'), 8);
+	assert.equal(indentColumns('\t\tx'), 8);
+});
+
+test('isCodeIndent：同一段缩进在顶格是代码块、在列表项里不是', () => {
+	assert.equal(isCodeIndent(['    x'], 0), true, '顶格 4 空格');
+	assert.equal(isCodeIndent(['- a', '    x'], 1), false, '列表项（容器列 2）里的 4 空格');
+	assert.equal(isCodeIndent(['1. a', '    x'], 1), false, '有序列表（容器列 3）里的 4 空格');
+	assert.equal(isCodeIndent(['- a', '  - b', '      x'], 2), false, '嵌套两层（容器列 4）里的 6 空格');
+	assert.equal(isCodeIndent(['- a', '      - b', '      x'], 2), true, '更深的兄弟项不是容器，继续上找');
+	assert.equal(isCodeIndent(['段落', '    x'], 1), true, '顶格段落后（容器列 0）的 4 空格');
+});
+
+test('isIndentedCode / isIndentedCodeContinuation 的分支（空行那条只豁免前者）', () => {
+	assert.equal(isIndentedCode(['    x'], 0), true, '文首第一行');
+	assert.equal(isIndentedCode(['段落', '    x'], 1), false, '上一行非空且非缩进 = 段落延续');
+	assert.equal(isIndentedCode(['', '    x'], 1), true, '空行之后');
+	assert.equal(isIndentedCode(['    a', '    b'], 1), true, '续在一个已开的代码块里');
+	assert.equal(isIndentedCode(['- a', '', '      x'], 2), true, '列表项内空行之后（相对 4 列）');
+
+	assert.equal(isIndentedCodeContinuation(['    a', '    b'], 1), true, '续行');
+	assert.equal(isIndentedCodeContinuation(['', '    x'], 1), false, '空行之后起块，不是续行');
+	assert.equal(isIndentedCodeContinuation(['段落', '    x'], 1), false, '段落延续');
+	assert.equal(isIndentedCodeContinuation(['    x'], 0), false, '文首没有可续的上一行');
 });
 
 // —— 图片 · 行内代码里的图片（V114 新增的第四条行级排除）——
@@ -392,6 +548,9 @@ test('实测没有 .cm-table-widget 的写法不产 table 区间', () => {
 		[],
 		'列表项延续（空行后 2 空格缩进）：顶层才有 widget',
 	);
+	// V118 实测：4 空格那格也没有 widget —— 表格只认顶格，与容器无关（所以它不跟图片 / 围栏 /
+	// `$$` / HTML 块一起改成「相对容器」判据，保持原有守卫）
+	assert.deepEqual(outline('- item\n\n    | a | b |\n    | - | - |'), [], '列表项内 4 空格');
 	assert.deepEqual(outline('> | a | b |\n> | - | - |'), ['quote:0-1'], '引用行里由外层引用块覆盖');
 	assert.deepEqual(outline('> [!note]\n> | a | b |\n> | - | - |'), ['callout:0-2'], 'Callout 里由外层覆盖');
 	assert.deepEqual(outline('<div>\n| a | b |\n| - | - |\n</div>'), ['html:0-3'], '裸 HTML 块里由外层覆盖');

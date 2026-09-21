@@ -93,18 +93,116 @@ export function isBlockLevelTag(tag: string): boolean {
 	return BLOCK_TAGS.has(name) && !INLINE_TAGS.has(name);
 }
 
-/** 行首（≤3 个前导空格）是否为块级 HTML 起始标签；是则返回小写标签名。 */
+/** Tab 停靠位，与 CommonMark 的 tab stop 一致。 */
+const TAB_STOP = 4;
+
+/** 行首缩进的**列宽**（Tab 按 tab stop 展开）。注意 `/^ {4,}/` 只数空格、不是列宽。 */
+export function indentColumns(line: string): number {
+	let cols = 0;
+	for (const ch of /^[ \t]*/.exec(line)?.[0] ?? '') {
+		cols += ch === '\t' ? TAB_STOP - (cols % TAB_STOP) : 1;
+	}
+	return cols;
+}
+
+/** 列表标记：缩进 + 标记本体 + 后随空白（三段都要；后随空白的列宽算进标记宽度）。 */
+const LIST_MARKER = /^([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)/;
+
+/**
+ * 本行「所在列表项的内容列」；不在任何列表项里时返回 0。
+ *
+ * 向前找**最近一个缩进比本行浅**的列表标记行 —— 它就是容纳本行的列表项；遇到顶格的非列表
+ * 非空行即返回 0（容器到此为止）。空行**不**终结查找（松散列表里空行之后的缩进代码块仍属
+ * 那个列表项）。回看的两条早退（更浅的标记行 / 顶格非列表行）同时也是性能约束。
+ */
+function listContentColumns(lines: readonly string[], start: number): number {
+	const indent = indentColumns(lines[start] ?? '');
+	for (let i = start - 1; i >= 0; i--) {
+		const line = lines[i] ?? '';
+		if (line.trim() === '') continue;
+		const marker = LIST_MARKER.exec(line);
+		if (marker) {
+			const markerIndent = indentColumns(line);
+			// 同级 / 更深的兄弟项不是容器，继续往上找
+			if (markerIndent < indent) {
+				return markerIndent + (marker[2] ?? '').length + indentColumns(marker[3] ?? '');
+			}
+			continue;
+		}
+		if (indentColumns(line) === 0) return 0;
+	}
+	return 0;
+}
+
+/**
+ * 本行相对**它所在容器的内容列**的缩进 ≥ 4 列 —— 缩进代码块的必要条件（不充分）。
+ *
+ * 为什么不能一概而论「行首 4 个空格」：缩进代码块的真实判据是**相对容器**的（CommonMark：
+ * `indent ≥ 所在容器的内容列 + 4`）。列表项把容器内容列抬到 2（`- `）/ 3（`1. `）/ 更深层，
+ * 所以同一个「4 空格」在顶格是代码块、在列表项里完全合法。
+ *
+ * 真机实测（运行中的 Obsidian，探针笔记整篇滚进视口后读 DOM）：`- 父项` + 4 空格缩进的
+ * 图片 / 围栏 / HTML 块**都**有 widget，而顶格 4 空格、列表项内 6 空格（相对 4）、
+ * 段落延续 4 空格围栏 **都**没有（是 `cm-hmd-indented-code`）。
+ *
+ * 围栏用这个（**不**含下一条的段落豁免）：围栏可以打断段落。
+ */
+export function isCodeIndent(lines: readonly string[], start: number): boolean {
+	return indentColumns(lines[start] ?? '') >= listContentColumns(lines, start) + 4;
+}
+
+/**
+ * 本行是否落在**缩进代码块**里。图片 / 块级 HTML 用它。
+ *
+ * 相对缩进够 4 列之后还有两条通道：本行是文首第一行（没有上文，起块）；或上一行是空行
+ * （空行之后起块）；或上一行**本身就是缩进行**（续在一个已经开着的代码块里 —— 这一条不能省：
+ * `    x` + `    ![i](p.png)` 实测整段都是 `cm-hmd-indented-code`，漏掉它就会多出一条幽灵候选）。
+ *
+ * 已知偏差（**接受**，见 README 的已知限制）：这里用「上一行非空」近似「上一行是段落」，
+ * 所以 `# 标题` 紧跟 `    ![x](p.png)` 会多收一条。要精确就得判「上一行是不是段落」。
+ */
+export function isIndentedCode(lines: readonly string[], start: number): boolean {
+	if (!isCodeIndent(lines, start)) return false;
+	if (start === 0) return true;
+	if ((lines[start - 1] ?? '').trim() === '') return true;
+	return isCodeIndent(lines, start - 1);
+}
+
+/**
+ * 本行是否「续在一个**已经开着**的缩进代码块里」= 相对缩进够 4 列、上一行非空、且上一行也是缩进行。
+ *
+ * `$$` 用这个，而不是 `isIndentedCode`：数学块是**块级规则**，能打断段落、也能在空行后另起块 ——
+ * 真机实测（整篇滚进视口）：顶格 4 / 6 / 8 空格、列表内 4 / 6 / 10 空格、Tab 缩进、段落延续
+ * 4 / 6 空格，全都照样建出 `math-block.cm-embed-block`（带 `.embed-actions` + 本插件图标）；
+ * 而 `    code` + 空行 + `    $$` 与 `    code` + `    $$` **都**照建。唯一没有 widget 的是
+ * 「上一行本身就是缩进行」（`    x` + `    $$`）：那一行已被缩进代码块吞掉，是 `cm-hmd-indented-code`。
+ */
+export function isIndentedCodeContinuation(lines: readonly string[], start: number): boolean {
+	if (!isCodeIndent(lines, start)) return false;
+	if (start === 0) return false;
+	if ((lines[start - 1] ?? '').trim() === '') return false;
+	return isCodeIndent(lines, start - 1);
+}
+
+/** 行首（前导空白不限）是否为块级 HTML 起始标签；是则返回小写标签名。 */
 function matchBlockTag(line: string): string | null {
-	// CommonMark 类型 6：标签后必须是空白 / `/` / `>` / 行尾；4 空格缩进属于代码块，不算。
-	const match = /^ {0,3}<([a-z][a-z0-9-]*)(?=[\s/>]|$)/i.exec(line);
+	// CommonMark 类型 6：标签后必须是空白 / `/` / `>` / 行尾。
+	// 「多少缩进算代码块」不再按行首空格数硬判，交给调用方的 `isIndentedCode`（按相对容器判）。
+	const match = /^[ \t]*<([a-z][a-z0-9-]*)(?=[\s/>]|$)/i.exec(line);
 	const tag = match?.[1]?.toLowerCase();
 	return tag && BLOCK_TAGS.has(tag) ? tag : null;
 }
 
-/** 块级原始 HTML：到第一个空行结束（文末也算结束）。 */
+/**
+ * 块级原始 HTML：到第一个空行结束（文末也算结束）。
+ *
+ * 缩进判据按**相对容器**（真机实测）：`- 父项` + 4 空格 `<div>` 有 `.cm-html-embed` widget；
+ * 顶格 4 空格（后面看上一行，见 `isIndentedCode`）、列表项内 6 空格 → 都是 `cm-hmd-indented-code`。
+ */
 function matchHtmlBlock(lines: readonly string[], start: number): BlockMatch | null {
 	const tag = matchBlockTag(lines[start] ?? '');
 	if (!tag) return null;
+	if (isIndentedCode(lines, start)) return null;
 
 	let end = start;
 	while (end + 1 < lines.length && (lines[end + 1] ?? '').trim() !== '') end++;
@@ -117,21 +215,38 @@ function matchHtmlBlock(lines: readonly string[], start: number): BlockMatch | n
 	};
 }
 
-/** 开围栏：3 个及以上的反引号或波浪号；反引号围栏的信息串里不允许再出现反引号。 */
-const FENCE_START = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+/** 开围栏：3 个及以上的反引号或波浪号（前导空白不限，缩进按容器判）；反引号围栏的信息串里不允许再出现反引号。 */
+const FENCE_START = /^[ \t]*(`{3,}|~{3,})(.*)$/;
 /** 闭围栏：同字符、长度不小于开围栏，且不带信息串。 */
-const FENCE_END = /^ {0,3}(`{3,}|~{3,})\s*$/;
+const FENCE_END = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 
-/** 围栏代码块：到闭围栏为止；找不到闭围栏（未闭合）则吃到文末。 */
+/**
+ * 围栏代码块：到闭围栏为止；找不到闭围栏（未闭合）则吃到文末。
+ *
+ * 缩进判据按**相对容器**（真机实测）：`- 父项` + 4 空格缩进的 ```js 照样有 `.code-block-flair`
+ * （+ 本插件的 `.text-popup-flair-action`），mermaid 那格甚至建出 `.cm-preview-code-block` widget；
+ * 而「顶格 4 空格」「列表项内 6 空格（相对 4）」「段落延续 + 4 空格」三种**都没有** chip、
+ * 也没有 widget（整段是 `cm-hmd-indented-code`）。
+ *
+ * 这里用 `isCodeIndent` 而不是 `isIndentedCode`：围栏**可以**打断段落，所以「上一行非空就豁免」
+ * 那条不适用（段落延续 + 4 空格的围栏实测确实不是代码块）。
+ *
+ * 闭围栏与开围栏**同容器**：允许的缩进上限是开围栏所在容器的内容列 + 3，而不是一律 3
+ * （列表项内的闭围栏跟着列表缩进，实测 `    ``` ` 能正常闭合 `- 父项` 里的那一格）。
+ */
 function matchFencedBlock(lines: readonly string[], start: number): BlockMatch | null {
+	if (isCodeIndent(lines, start)) return null;
 	const fence = FENCE_START.exec(lines[start] ?? '')?.[1];
 	if (!fence) return null;
 
+	const limit = listContentColumns(lines, start) + 3;
 	const char = fence[0];
 	const length = fence.length;
 	let end = lines.length - 1;
 	for (let i = start + 1; i < lines.length; i++) {
-		const closing = FENCE_END.exec(lines[i] ?? '')?.[1];
+		const line = lines[i] ?? '';
+		if (indentColumns(line) > limit) continue;
+		const closing = FENCE_END.exec(line)?.[1];
 		if (closing && closing[0] === char && closing.length >= length) {
 			end = i;
 			break;
@@ -154,15 +269,22 @@ function matchCallout(lines: readonly string[], start: number): BlockMatch | nul
 	return { kind: 'callout', endLine: end, include: true };
 }
 
-/** 数学块起始行：行首 `$$`。行内公式 `$x$` 不带 `$$`，不会命中。 */
-const MATH_START = /^ {0,3}\$\$/;
+/** 数学块起始行：行首（缩进不限）的 `$$`。行内公式 `$x$` 不带 `$$`，不会命中。 */
+const MATH_START = /^[ \t]*\$\$/;
 
 /**
  * `$$` 数学块。
  * `$$ a+b = c$$` 是合法的块级写法：同一行里出现第二个 `$$` 就当场结束，不能要求 `$$` 独占一行。
+ *
+ * 缩进判据：数学块是**块级规则**，能打断段落、也能在空行后另起块 —— 真机实测（整篇滚进视口）
+ * 顶格 4 / 6 / 8 空格、列表内 4 / 6 / 10 空格、Tab 缩进、段落延续 4 / 6 空格**全都**建出
+ * `math-block.cm-embed-block` 并带本插件图标。所以这里**不**按 4 空格排除（原来的
+ * `^ {0,3}` 会让这些格子在候选集里缺席、图标成了点不开的死图标）。
+ * 唯一没有 widget 的是「上一行本身就是缩进行」那一格（已被缩进代码块吞掉）。
  */
 function matchMathBlock(lines: readonly string[], start: number): BlockMatch | null {
 	if (!MATH_START.test(lines[start] ?? '')) return null;
+	if (isIndentedCodeContinuation(lines, start)) return null;
 
 	const first = (lines[start] ?? '').indexOf('$$');
 	if ((lines[start] ?? '').indexOf('$$', first + 2) >= 0) {
@@ -321,10 +443,11 @@ function firstHitOutsideCode(
  * 图片：单行区间。
  *
  * 四条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
- * 但永远没有图标」的幽灵条目）：4 空格缩进会被当成缩进代码块；表格由 `.cm-table-widget`
- * 自己画、单元格里根本没有 `.image-embed`；行内 HTML widget 里的图片是 `span` 且没有
- * `.embed-actions`；**行内代码**里的图片在 LP 里只是一段文字（实测 `span.cm-inline-code`，
- * 没有 `.image-embed`）—— 这四条是同一族。
+ * 但永远没有图标」的幽灵条目）：**相对所在列表项的内容列多出 4 列**才是缩进代码块
+ * （列表项里的 4 空格是正常嵌套，照样有图标 —— 见 `isIndentedCode` 的实测说明）；
+ * 表格由 `.cm-table-widget` 自己画、单元格里根本没有 `.image-embed`；行内 HTML widget 里的
+ * 图片是 `span` 且没有 `.embed-actions`；**行内代码**里的图片在 LP 里只是一段文字
+ * （实测 `span.cm-inline-code`，没有 `.image-embed`）—— 这四条是同一族。
  *
  * 行内代码那条要在**取出图片语法之前**先算区间：反引号本身在 LP 的 DOM 里是被隐藏的格式符，
  * 文本扫描器看不到「这里被反引号包着」，只能自己按 `inlineCodeRanges` 的规则算。
@@ -338,7 +461,7 @@ function firstHitOutsideCode(
  */
 function matchImageBlock(lines: readonly string[], start: number): BlockMatch | null {
 	const line = lines[start] ?? '';
-	if (/^ {4,}/.test(line)) return null;
+	if (isIndentedCode(lines, start)) return null;
 	if (line.trimStart().startsWith('|')) return null;
 
 	const ranges = inlineCodeRanges(line);
@@ -372,6 +495,11 @@ function matchImageBlock(lines: readonly string[], start: number): BlockMatch | 
  *     实测照样有 widget，所以判据不是「在列表里」而是「有没有前导空白」）。
  * 不补这条就会多出一类幽灵：列表项延续的表（`- item` + 空行 + 2 空格缩进的表）在扫描器里
  * 是一条候选，编辑器里却没有图标可点。
+ *
+ * V118 复核（同一次真机量测，否掉了「缩进表是同一族的第三个死图标」这个假设）：
+ * `- 父项` + 空行 + 4 空格缩进的表**同样没有** `.cm-table-widget`（那两行是
+ * `HyperMD-list-line-nobullet`），2 空格那格也一样 —— 表格就是只认顶格，与容器无关，
+ * 所以这条守卫**保持原样**，不跟着图片 / 围栏 / `$$` / HTML 块一起改成相对容器判据。
  *
  * `matchTable` 会做完整的单元格切分，扫描里只用它的 `end`（区间右边界），属于可接受的冗余。
  * 依赖方向不成环：`convert/*` 不 import `../blocks`，只 import 同目录的 `forward-*` 与 `shared`。
