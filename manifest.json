@@ -1,7 +1,7 @@
 {
 	"id": "text-popup",
 	"name": "Text Popup",
-	"version": "1.1.7",
+	"version": "1.1.8",
 	"minAppVersion": "1.13.0",
 	"description": "Use Popup Window to View Text",
 	"author": "Johnny Learns",
