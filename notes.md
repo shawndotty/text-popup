@@ -1,1 +1,1 @@
-- add zoom in and zoom out feature in popup window
+- add support for markdwon table block
