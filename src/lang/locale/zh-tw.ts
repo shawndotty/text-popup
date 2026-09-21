@@ -26,6 +26,9 @@ const zhTW: Partial<typeof en> = {
 	'Magnify quotes': '放大引用塊',
 	'Show a magnifier icon for blockquotes in Live Preview.':
 		'為即時預覽裡的引用塊顯示放大圖示。',
+	'Magnify tables': '放大表格',
+	'Show a magnifier icon for Markdown tables in Live Preview.':
+		'為即時預覽裡的 Markdown 表格顯示放大圖示。',
 	'Popup content': '彈窗內容',
 	'Render HTML and Markdown': '渲染 HTML 與 Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":

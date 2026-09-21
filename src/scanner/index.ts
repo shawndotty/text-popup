@@ -6,7 +6,15 @@
  */
 
 import { debounce, Platform } from 'obsidian';
-import { injectAction, injectFlairAction, injectImageAction, removeAction, removeFlairAction } from './inject';
+import {
+	injectAction,
+	injectFlairAction,
+	injectImageAction,
+	injectTableAction,
+	removeAction,
+	removeFlairAction,
+	removeTableAction,
+} from './inject';
 import { notifyQuoteActionsChanged, quoteActionsExtension, registerQuoteHover, QUOTE_ACTION_CLASS } from './quote';
 import { createTextPopupSource, openFirstTextPopup } from './session';
 import {
@@ -17,6 +25,7 @@ import {
 	IMAGE_SELECTOR,
 	isKindEnabled,
 	SCAN_DEBOUNCE_MS,
+	TABLE_ACTIONS_CLASS,
 } from './shared';
 import type { TextPopupHost } from './shared';
 
@@ -44,7 +53,7 @@ export function registerBlockScanner(host: TextPopupHost): void {
 /**
  * 重新扫描并按当前设置同步按钮（设置变更、开关切换时也会调用）。
  *
- * 只管前两处**由本函数负责**的注入点（`.cm-embed-block` 与 `.code-block-flair`）与图片那处；
+ * 只管**由本函数负责**的注入点（`.cm-embed-block` 一族含表格、`.code-block-flair`、图片那处）；
  * **引用块不在这里**：它的图标由 CM6 装饰器托管、随文档变更自动重算，设置变更则走
  * `notifyQuoteActionsChanged`（见 `scanner/quote.ts`，那里也写清了为什么不能塞进这条路径）。
  */
@@ -55,13 +64,19 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 	}
 	if (Platform.isMobile) return;
 
-	// 一次遍历 + 类名分类：走 `.cm-embed-block` 的四类区块共用它，不必为每类各跑一次全文档查询。
+	// 一次遍历 + 类名分类：走 `.cm-embed-block` 的四类区块与表格共用它，不必为每类各跑一次全文档查询。
 	activeDocument.querySelectorAll<HTMLElement>(BLOCK_SELECTOR).forEach((blockEl) => {
 		const kind = classifyBlock(blockEl);
 		if (!kind) return;
-		if (isKindEnabled(host.settings, kind)) injectAction(blockEl, host, kind);
-		// 该类被关掉时，把已注入的按钮摘掉（例如关掉「放大代码块」后立刻生效）
-		else removeAction(blockEl);
+		if (!isKindEnabled(host.settings, kind)) {
+			// 该类被关掉时，把已注入的按钮摘掉（例如关掉「放大代码块」后立刻生效）
+			// 表格的容器是本插件自建的、锚点也不同，要连容器一起摘（见 removeTableAction）
+			if (kind === 'table') removeTableAction(blockEl);
+			else removeAction(blockEl);
+			return;
+		}
+		if (kind === 'table') injectTableAction(blockEl, host);
+		else injectAction(blockEl, host, kind);
 	});
 
 	// 第二处注入点：普通围栏代码块（非 widget）右上角的语言名 / 复制 chip，只吃「放大代码块」这一个开关。
@@ -89,6 +104,14 @@ export function removeAllActions(): void {
 		.querySelectorAll<HTMLElement>(`.${ACTION_CLASS}:not(.${QUOTE_ACTION_CLASS})`)
 		.forEach((actionEl) => {
 			actionEl.remove();
+		});
+
+	// 表格的图标容器是本插件自己建的（不是核心建的 .embed-actions）：只删按钮会留下空壳，
+	// 所以这里连容器一起清掉（`removeTableAction` 走的是区块 → 容器的路径，禁插件时无从下手）。
+	activeDocument
+		.querySelectorAll<HTMLElement>(`.${TABLE_ACTIONS_CLASS}`)
+		.forEach((actionsEl) => {
+			actionsEl.remove();
 		});
 }
 

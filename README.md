@@ -4,7 +4,7 @@
 
 把笔记里**可放大的区块**单独放大到弹窗里阅读，交互与 Obsidian 内置的图片放大（lightbox）一致。
 
-可放大的区块有六类：手写的**块级 HTML**、**围栏代码块**、**标注（Callout）**、**`$$` 数学块**、**图片**、**引用块（`> …`）**。后五类都是原生内容、不需要任何额外标记；其中四类（代码块 / Callout / 数学块 / 图片）本身就有右上角的控制图标，本插件把放大图标加进那条图标里（位于 `</>`「编辑这个模块」的左侧；图片则在原生「放大」图标左侧），引用块没有原生控制图标，图标由本插件自己画在块的右上角。
+可放大的区块有七类：手写的**块级 HTML**、**围栏代码块**、**标注（Callout）**、**`$$` 数学块**、**图片**、**引用块（`> …`）**、**表格**。后六类都是原生内容、不需要任何额外标记；其中四类（代码块 / Callout / 数学块 / 图片）本身就有右上角的控制图标，本插件把放大图标加进那条图标里（位于 `</>`「编辑这个模块」的左侧；图片则在原生「放大」图标左侧），引用块没有原生控制图标，图标由本插件自己画在块的右上角，表格的图标容器也由本插件自己建在表格右上角（Obsidian 不给表格控制图标）。
 
 ## 用法
 
@@ -24,7 +24,7 @@
 - 用 `Esc`、点击弹窗外的遮罩、或点击弹窗右上角的关闭按钮都可以关闭。
 - 弹窗**铺满整个 Obsidian 窗口**（与内置图片放大同一尺寸基准），适合演示笔记时把重点单独凸显出来。
 - 弹窗**标题栏显示来源笔记名**，便于演示时溯源；笔记名固定使用主题文字色，不受设置里的「弹窗文字颜色」影响。同一个笔记里有多个可放大区块时，标题栏还会附带**「当前 / 总数」序号**（例如 `我的笔记 · 2 / 5`）；只有一个时**不加序号**，与 1.0.2 的标题完全一致。
-- 打开后可用 **`←` / `→` 在同一个笔记的全部可放大区块之间切换**（六类区块混在一起、按文档顺序），不用关掉弹窗再去找下一个图标。规则与 Obsidian 内置的图片放大（lightbox）一致：只用左右两个键；在最后一个按 `→` 环绕回第一个，在第一个按 `←` 环绕到最后一个；**空块**（点了不会弹窗的块）不参与切换。切换后正文会**回到顶部**，而已调整的**字号 / 缩放会保持**，方便连续阅读；`Alt`+点击的**视图缩放则会复位**（它的锚点属于上一块内容）。
+- 打开后可用 **`←` / `→` 在同一个笔记的全部可放大区块之间切换**（七类区块混在一起、按文档顺序），不用关掉弹窗再去找下一个图标。规则与 Obsidian 内置的图片放大（lightbox）一致：只用左右两个键；在最后一个按 `→` 环绕回第一个，在第一个按 `←` 环绕到最后一个；**空块**（点了不会弹窗的块）不参与切换。切换后正文会**回到顶部**，而已调整的**字号 / 缩放会保持**，方便连续阅读；`Alt`+点击的**视图缩放则会复位**（它的锚点属于上一块内容）。
 - 弹窗底部有控制条，可临时调整**字号**与**缩放**，以及一键**恢复默认**。文字在窗口里自动居中；内容超出窗口时在弹窗内滚动。
 - 弹窗里默认**按语法渲染块内的 HTML 与 Markdown**：`<b>`、`<span style>`、`<table>`、`<img>` 等标签按语义显示，块内的 `**粗体**`、`# 标题`、`- 列表`、`> 引用`、`| 表格 |`、`` `行内代码` `` 都会正常渲染；`[[笔记]]` 可点击跳转，`![[图片]]` 与 `![](图.png)` 能显示出图。
 - 弹窗内的排版复用 Obsidian 阅读视图的样式（内容容器带 `markdown-rendered` 类），因此观感与阅读视图一致，标题、列表等会随字号 / 缩放等比放大。
@@ -79,7 +79,29 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 
 引用块有单独开关（见下方「设置项」的「放大引用块」），关掉后图标会立刻消失、也不再计入方向键的候选总数。
 
-> 与另外五类的差别：前五类的图标都插在**核心已经建好的**容器 / chip 里，引用块没有那样的容器 —— 它的图标由一个 CodeMirror 装饰器承载（实现细节见「实现要点」）。这是当前唯一一处需要本插件自己定位的图标。
+> 与另外六类的差别：其余几类的图标都插在**核心已经建好的**容器 / chip 里（表格那处的容器也是本插件自己建的，见下方「表格」），引用块连容器都没有 —— 它的图标由一个 CodeMirror 装饰器承载（实现细节见「实现要点」）。
+
+### 表格
+
+Markdown 表格（`| a | b |` + 分隔行）同样是原生内容，**不需要任何额外标记**：
+
+```markdown
+| 中文 | 词 | 例句 |
+| ---- | ---- | ---- |
+| 我的 | mine | The dog is mine. |
+```
+
+在**实时预览**中把鼠标移到表格上，表格**右上角**就会出现本插件的放大图标（与核心给代码块 / 图片的图标同一套胶囊皮肤、同一套定位）。点它打开弹窗，正文是**真正的表格**（`MarkdownRenderer` 渲染出的 `<table>`，有表头与边框），单元格字号也跟随弹窗的「字号 / 缩放」。
+
+表格的图标与另外几类有一处不同，值得单独说明：
+
+- **图标容器是本插件自己建的**。Obsidian 给表格 widget 建的容器（`.cm-table-widget`）里**没有** `.embed-actions` —— 核心的「编辑这个模块」图标只给嵌入笔记 / 代码块 / 数学块 / HTML 块建，不给表格建。所以本插件在表格本体（`.table-wrapper`）里自己建一个同形容器再插按钮：位置、尺寸、悬停皮肤全部复用核心那套，只是「悬停显形」这条要自己补（核心的显隐规则里显式写明了 `:not(.cm-table-widget, …)`）。
+- **表格表头行必须顶格**（行首不能有空格）：实时预览只给顶格的表头行建表格 widget。带前导空格的写法（含「`- item` + 空行 + 2 空格缩进的表」，那两行在编辑器里只是列表项里的普通文字）既不产候选、也没有图标，两边一致。
+- **只在表格本体（而不是整个块容器）上定位**：表格 widget 的容器常被拉满整行宽，锚在它上面图标会飘到编辑区右缘、离表格很远；锚在表格本体右上角则始终贴着表格。
+- **表格右上角那枚图标会盖住表头最后一格的右上角约 28×24 px**（未悬停时透明但占位）—— 与引用块图标那条限制同性质。它不重叠核心自己的「+ 列」按钮（在表格右缘**外侧**）与列拖拽手柄（在表头上方）。
+- **表格改动会重建 DOM**：在单元格里改字是原地更新（图标不动），但**插入 / 删除行列**等结构化改动会让核心重建表格 DOM，图标先消失、随即被重扫补回（150 ms 防抖内）。
+
+表格有单独开关（见下方「设置项」的「放大表格」），关掉后图标会立刻消失、也不再计入方向键的候选总数。
 
 ### 图片
 
@@ -99,7 +121,7 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 
 两个放大图标是**兄弟节点**、各自独立：点原生那个走 Obsidian 的方式，点本插件那个走弹窗，互不干扰。本插件的图标插在原生「放大」的**左侧**，与 `.embed-actions` 里其它区块「本插件图标在最左」的排列保持一致。
 
-弹窗里的图片**按 Obsidian 阅读视图的方式显示**（同样交给核心的 `MarkdownRenderer` 渲染），并计入方向键的候选总数 —— 可以像其它区块一样用 `←` / `→` 在「代码块 / Callout / 数学块 / HTML 块 / 图片 / 引用块」之间连续翻。
+弹窗里的图片**按 Obsidian 阅读视图的方式显示**（同样交给核心的 `MarkdownRenderer` 渲染），并计入方向键的候选总数 —— 可以像其它区块一样用 `←` / `→` 在「代码块 / Callout / 数学块 / HTML 块 / 图片 / 引用块 / 表格」之间连续翻。
 
 支持的写法与位置：
 
@@ -271,7 +293,7 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 | --- | --- |
 | `Show Popup In The Note` | 打开当前笔记里的第一个可放大区块；打开后照旧可以用 `←` / `→` 翻到同一个笔记的其它块 |
 
-- **「第一个」= 文档顺序里第一个能打开的块**：六类区块混在一起按出现顺序算，空块（点了不会弹窗的块）不算，所以「第一个」永远是有内容可看的那一条。
+- **「第一个」= 文档顺序里第一个能打开的块**：七类区块混在一起按出现顺序算，空块（点了不会弹窗的块）不算，所以「第一个」永远是有内容可看的那一条。
 - **笔记里一个可放大的块都没有时只提示**（「当前笔记里没有可放大的区块」），不会开一个空弹窗。
 - **候选集与点放大图标完全一致**：同一个笔记里，命令打开的「总数 / 序号」与点图标打开时逐字相同；设置里单独关掉的区块类别（例如「放大代码块」）既没有图标、也不算这个命令的「第一个」。
 - **不依赖放大图标**：把设置里的「启用放大图标」关掉（图标全部消失）之后命令照旧可用 —— 它扫的是**笔记文本**，不是屏幕上的图标。
@@ -282,7 +304,7 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 
 默认支持 `div` 与 `p`。可以在 **设置 → Text Popup → 支持的标签** 中修改（用逗号分隔，例如 `div, p, section`），改完立即生效，不需要改代码、也不需要重启插件。
 
-判定规则：只有**块级原始 HTML** 才有放大图标。也就是说，只有你自己手写的 HTML 块会被识别；Markdown 语法（普通段落、标题、列表）生成的元素不会被误伤。这个列表**只作用于手写的 HTML 块**；代码块 / Callout / 数学块 / 图片 / 引用块由设置里各自的开关控制，与这里无关。
+判定规则：只有**块级原始 HTML** 才有放大图标。也就是说，只有你自己手写的 HTML 块会被识别；Markdown 语法（普通段落、标题、列表）生成的元素不会被误伤。这个列表**只作用于手写的 HTML 块**；代码块 / Callout / 数学块 / 图片 / 引用块 / 表格由设置里各自的开关控制，与这里无关。
 
 ## 设置项
 
@@ -294,6 +316,7 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 | 放大数学块 | 开 | 为实时预览里的 `$$` 数学块显示放大图标 |
 | 放大图片 | 开 | 为实时预览里的图片显示放大图标。关掉后图片上的图标消失，原生「放大」图标仍照常工作 |
 | 放大引用块 | 开 | 为实时预览里的引用块（`> …`）显示放大图标。关掉后引用块右上角的图标立刻消失，也不再计入方向键的候选总数 |
+| 放大表格 | 开 | 为实时预览里的 Markdown 表格显示放大图标。关掉后表格右上角的图标（**连本插件自己建的那个容器**）立刻消失，也不再计入方向键的候选总数 |
 | 渲染 HTML 与 Markdown | 开 | 在弹窗内按语法渲染块里的 HTML 与 Markdown；关闭后完全回到纯文本显示（`**` 等符号原样出现），适合刻意演示 Markdown 语法本身的块 |
 | 弹窗背景色 | 跟随主题 | 由「跟随主题背景色」开关控制：开着时跟随主题、色块行隐藏；关掉后出现色块，旁边还能一键「恢复默认」（`#2b2b2b`） |
 | 弹窗文字颜色 | 跟随主题 | 只作用于弹窗**正文**；标题栏的笔记名与底部控制条始终跟随主题色。显隐与「恢复默认」同上（默认色 `#dcddde`） |
@@ -309,12 +332,14 @@ Markdown 的引用块（`> …`）同样是原生内容，**不需要任何额�
 - **行内代码的判定规则（真机实测，写在 `blocks.ts` 的 `inlineCodeRanges`）**：① 反引号串 = 连续 n 个 `` ` ``，找到**长度相同**的下一串就在那里闭合（同 CommonMark）；② 同一行找不到等长的那一串时，这一段**一直吃到行尾** —— 实时预览里**未闭合的反引号也当代码**（`` `abc ![[x]] `` 整段是 `span.cm-inline-code`，没有图标）；③ 前面有**奇数个**反斜杠的反引号被转义、不参与；④ 代码段**不跨行**（上一行的反引号不会影响这一行）。**已知不一致**：规则 ② 与**阅读视图**相反 —— `` `abc ![[x]] `` 在阅读视图里反引号是字面文本、图会显示出来。图标只存在于实时预览，所以候选集跟实时预览对齐，代价是这类写法在阅读视图里能看到图、却不进候选（与「引用块的懒惰续行」「外链图片多出一条」同性质的取舍）。
 - **不支持移动端**：移动端没有悬停，Obsidian 内置的图片放大图标同样不含移动端，V1 跟随该行为。**引用块也一样**：装饰器在移动端直接返回空装饰集。
 - **标题里的「总数」= 笔记里的可放大区块数，与滚动位置无关**：候选集来自**笔记文本**（不是当前屏幕上的图标），所以滚到任意位置、把光标停进任意块里、或分屏打开同一笔记，同一个笔记的总数始终一致。代价是**翻到视口外的块时编辑器不会跟着滚动**（弹窗是全屏模态，编辑器被遮住）；另外光标停在自己手写 HTML 块里时该块没有图标（这是 Obsidian 的既有行为），但它**仍在候选里**，可以从别的块用方向键翻到它。
-- **候选块由笔记文本扫出，规则与编辑器渲染可能略有出入**：HTML 块按 CommonMark 的 HTML 块规则（到第一个空行结束、4 空格缩进的 `<p>` 视作代码块不计入、`script` / `style` 一类标签不计入）；围栏代码块到闭围栏为止，Callout 与引用块到第一个非 `>` 行为止，`$$` 数学块到下一个 `$$` 为止。未闭合的围栏 / `$$` 会一直扫到文末，`$$$` 这类多 `$` 写法以第一个 `$$` 为界 —— 都是**稳定**的多一个或少一个，不会抖动。
-- **候选数会随笔记里的代码块、图片与引用块数量明显变多**：方向键要在六类区块之间依次翻。这是「候选集 = 本笔记全部可放大区块」这条原则的必然结果，不打算为了少翻几屏而把「只在屏幕上的块」重新算进来。
+- **候选块由笔记文本扫出，规则与编辑器渲染可能略有出入**：HTML 块按 CommonMark 的 HTML 块规则（到第一个空行结束、4 空格缩进的 `<p>` 视作代码块不计入、`script` / `style` 一类标签不计入）；围栏代码块到闭围栏为止，Callout 与引用块到第一个非 `>` 行为止，`$$` 数学块到下一个 `$$` 为止，表格的判据与「表格转 HTML 命令」共用同一份实现（并额外要求表头行**顶格**）。未闭合的围栏 / `$$` 会一直扫到文末，`$$$` 这类多 `$` 写法以第一个 `$$` 为界 —— 都是**稳定**的多一个或少一个，不会抖动。
+- **候选数会随笔记里的代码块、图片与引用块数量明显变多**：方向键要在七类区块之间依次翻。这是「候选集 = 本笔记全部可放大区块」这条原则的必然结果，不打算为了少翻几屏而把「只在屏幕上的块」重新算进来。
 - **引用块的边界（真机实测）**：① 连续的 `>` 行**整段算一条**，引用里的标题 / 列表 / 围栏 / 嵌套（`> > `）都在这一条里，一个引用块只有一个图标；② **只有 `> ` 的空引用行**（连在引用段尾部）不产候选、也不挂图标（点开只会是一屏空白），但仍算进区间；③ **懒惰续行不算进区间**：`> a` 的下一行不写 `>` 时 Obsidian 仍把它画在引用条里，本实现按 `>` 前缀断句（与 Callout 同一取舍），弹窗里会少显示那一行；④ 引用行里的图片不单独成条（见上一条图片说明）；⑤ 引用块里的围栏不另算代码块、也不挂代码块 chip 的图标。
 - **引用块图标的两个形态限制**：① 图标挂在**块的首行**（与核心把图标放在块右上角同理），因此长引用块滚动到首行离开视口时，图标随之离开；② 图标未悬停时是**透明但占位**的，盖住首行右上角最多约 28×24 px（实测胶囊尺寸），极长的首行文字末尾会被压住 —— 与核心对代码块 chip / 图片图标的做法一致。
 - **性能**：引用块的图标要在文档每次变更时重算一次全文扫描（实测本库最大的笔记 829 行 / 19 545 字符，单次 0.295 ms）。若日后出现超大笔记，可按「变更行是否含 `>`」做增量跳过。
-- **内部类名依赖（全是非公开 API，已对照 `obsidian.asar` 的 `app.js` / `app.css` 原文）**：`.cm-embed-block` 及其分类用的 `.cm-html-embed` / `.cm-preview-code-block` / `.cm-callout` / `.math-block`、图标容器 `.embed-actions`（**图片版与引用块版是同一套**，仍然插首位）、普通代码块右上角的 `.code-block-flair`、图片嵌入的容器 `.image-embed`、引用行的类名 `HyperMD-quote`（引用块**要**据此挂图标，与代码块 chip「跳过引用行的围栏」的判断相反），以及「`.cm-line` 是 `position: relative`」这条定位前提（核心写在 `app.css` 的 `.markdown-source-view.mod-cm6 .cm-line` 上，核心自己的 `.code-block-flair` 也靠它）。Obsidian 升级后若图标不出现，集中修改 `src/scanner/inject.ts` 的 `injectAction` / `injectFlairAction` / `injectImageAction` 与 `src/scanner/shared.ts` 的选择器（`IMAGE_SELECTOR`）即可；引用块图标不出现则先看 `src/scanner/quote.ts` 的 `buildDecorations` 与 `styles.css` 里那条显隐规则。
+- **表格的边界（真机实测）**：① **表头行必须顶格** —— 带 1 / 2 / 3 个前导空格的表在实时预览里根本不生成表格 widget（只是普通文字，列表项延续时甚至是列表项里的文字），所以既不产候选也不挂图标；② **只有顶层的表格才有图标**：引用块里、Callout 里、裸 HTML 块里、列表项里的表格都不是顶层表格，由外层那一条候选覆盖（进弹窗仍能看到 —— 见「用法 → 表格」里的说明）；③ **结构化改动会重建 DOM**：插入 / 删除行列会让核心重建表格，图标先消失、150 ms 内被重扫补回，期间可能有一帧没有图标；④ 表格图标未悬停时**透明但占位**，盖住表头最后一格右上角约 28×24 px（实测胶囊尺寸）。
+- **一处方向已知偏差（幽灵方向，与本轮表格支持无关但会被表格放大）**：`matchHtmlBlock` 按 CommonMark 停在第一个空行，而实测实时预览会把整个 `<div>…</div>`（**中间含空行**）当成**一个** HTML 块。于是「HTML 块 → 空行 → 表格」这种写法里，表格文本会产出一条候选，而编辑器里并没有 `.cm-table-widget`（= 能翻到但没图标的幽灵）。它与图片 / 引用块的同类偏差同源，建议单开一轮修 `matchHtmlBlock` 的边界，本轮不加表格专属补丁。
+- **内部类名依赖（全是非公开 API，已对照 `obsidian.asar` 的 `app.js` / `app.css` 原文）**：`.cm-embed-block` 及其分类用的 `.cm-html-embed` / `.cm-preview-code-block` / `.cm-callout` / `.math-block` / `.cm-table-widget`（表格容器**也**带 `.cm-embed-block`）、表格的注入锚点 `.table-wrapper`、图标容器 `.embed-actions`（**图片版 / 引用块版 / 表格版是同一套**，仍然插首位）、普通代码块右上角的 `.code-block-flair`、图片嵌入的容器 `.image-embed`、引用行的类名 `HyperMD-quote`（引用块**要**据此挂图标，与代码块 chip「跳过引用行的围栏」的判断相反），以及「`.cm-line` 是 `position: relative`」这条定位前提（核心写在 `app.css` 的 `.markdown-source-view.mod-cm6 .cm-line` 上，核心自己的 `.code-block-flair` 也靠它）。另外表格的悬停显形依赖核心 `app.css` 里那条把表格排除在外的显隐规则（`.cm-embed-block:not(.cm-table-widget, .cm-lang-base):hover .embed-actions`）—— 我们补的规则正是为它而写。Obsidian 升级后若图标不出现，集中修改 `src/scanner/inject.ts` 的 `injectAction` / `injectFlairAction` / `injectImageAction` / `injectTableAction` 与 `src/scanner/shared.ts` 的选择器（`IMAGE_SELECTOR` / `TABLE_WIDGET_CLASS` / `TABLE_ACTIONS_CLASS`）即可；引用块图标不出现则先看 `src/scanner/quote.ts` 的 `buildDecorations` 与 `styles.css` 里那条显隐规则。
 - **代码块有两种形态，图标位置因此不同**：语言被 `mermaid` / `query` / `base` 等 post-processor 接管时，核心把代码块建成 widget，图标在「编辑这个模块」`</>` 左侧；普通语言（如 `typescript`）核心**不建 widget**，只把代码留成源码行，并在开围栏行末尾挂一个 `.code-block-flair` chip 当右上角的语言名 / 点击复制，图标就嵌在这个 chip 里。**这也是为什么代码块的图标是常显的**（chip 本身常显，核心没给它做悬停显隐），而 Callout / 数学块 / 图片 / 引用块四类要悬停才出现。
 - **引用块里的围栏不加代码块图标**：行首是 `>` 的围栏行（`>` 后面接三反引号）在扫描器里不算代码块区间（行首是 `>`），所以那里既不是代码块候选、也不挂代码块 chip 的图标 —— 避免出现「点开却翻出别的区块」。同理，Callout 内部的代码块由 Callout 自己渲染，只按外层 Callout 计一条。这两处的整段内容都由外层那一条覆盖，因此整段只有**外层那一个**放大图标（V114 起引用块也有了自己的图标）。
 - **围栏语言为 `base` 的代码块会按代码块处理**：核心也用 `.cm-preview-code-block` 建它的容器，并且 CSS 给它的控制图标条设了常显，所以它同样会有放大图标；这也是「有控制图标的区块才加放大图标」这条判据的自然结果。
@@ -353,12 +378,12 @@ src/
 ├── main.ts       # 生命周期：加载设置、挂设置页、注册扫描器
 ├── settings.ts   # 设置接口 + 默认值 + 声明式设置页（读 / 写 / 副作用都是纯函数）
 ├── tags.ts       # 标签注册表（手写 HTML 块的标签闸门）
-├── blocks.ts     # 按笔记文本扫出六类可放大区间（候选集的事实来源）
+├── blocks.ts     # 按笔记文本扫出七类可放大区间（候选集的事实来源）
 ├── commands.ts   # 入口层：两个转换命令 + `Show Popup In The Note` 命令 + 编辑器右键菜单
 ├── scanner/
-│   ├── index.ts  # 门面：注册扫描 + 同步前两处注入点 + 移除按钮
+│   ├── index.ts  # 门面：注册扫描 + 同步各处注入点 + 移除按钮
 │   ├── shared.ts # 扫描锚点选择器、分类与开关判据、共享类型
-│   ├── inject.ts # 三处 DOM 注入点（.cm-embed-block / .code-block-flair / .image-embed）
+│   ├── inject.ts # 四处 DOM 注入点（.cm-embed-block / .code-block-flair / .image-embed / 表格）
 │   ├── session.ts# 候选集组装 + 定位起点 + 打开弹窗（点图标 / 命令共用）
 │   └── quote.ts  # 引用块的图标：CM6 装饰器（唯一不走 DOM 注入的一处）
 ├── extract.ts    # 提取纯文本（回退）与富文本渲染输入（去注入节点 / 去缩进）
@@ -370,26 +395,27 @@ src/
 
 **设置页是声明式的，取值 / 存值 / 副作用各只有一处。**
 
-- 设置页由 `TextPopupSettingTab.getSettingDefinitions()` 返回 3 组 13 条定义，核心（1.13+）据此渲染，并把 `name` / `desc` 编进**设置搜索**索引 —— 这正是 `manifest.json` 的 `minAppVersion` 必须 ≥ `1.13.0` 的原因（`display()` 已标 `@deprecated`，不再保留第二套命令式设置页）。
+- 设置页由 `TextPopupSettingTab.getSettingDefinitions()` 返回 3 组 16 条定义，核心（1.13+）据此渲染，并把 `name` / `desc` 编进**设置搜索**索引 —— 这正是 `manifest.json` 的 `minAppVersion` 必须 ≥ `1.13.0` 的原因（`display()` 已标 `@deprecated`，不再保留第二套命令式设置页）。
 - 控件的读 / 写统一走 `settings.ts` 导出的纯函数 `readSettingValue` / `writeSettingValue`；「改完这个键要刷新什么」只有 `settingSideEffects` 一张表：`refreshActions` → `refreshTextPopupActions`、`quoteActions` → `notifyQuoteActionsChanged`、`rebuildDefinitions` → `this.update()`。**改字号 / 改颜色不触发任何扫描**（见上文引用块那条自激教训），由单测钉住。`writeSettingValue` 会返回「值有没有真的变」，值没变就不保存、不刷新。
 - 颜色两行用**虚拟键**（`popupBackgroundFollowTheme` / `popupTextFollowTheme`）表达「跟随主题」，`data.json` 里依旧只有 `popupBackgroundColor` / `popupTextColor` 两个字段、空串仍表示跟随主题。不能直接把空串喂给色块控件：`<input type="color">` 表示不了空值，浏览器会把它显示成 `#000000`。
 - 「支持的标签」改完要顺手把两个包裹标签拉回合法值（**先多行、后单行**，回落链依赖这个顺序），并重建定义让两个下拉的选项跟着变。重建时核心会**跳过焦点所在的那一行**，所以在输入框里打字不会丢焦点 —— 这也是原来那段手写下拉同步可以整段删掉的原因。
 
-**候选集是同一套，注入点有四处。**
+**候选集是同一套，注入点有五处。**
 
 - **widget 类区块**（块级原始 HTML、Callout、数学块，以及被 `mermaid` / `base` 等 post-processor 接管的代码块）：容器都带 `.cm-embed-block`，都在容器内建 `.embed-actions` 放控制图标（可与 `obsidian.asar` 的 `app.js` 原文对照：`createEl("div", "cm-html-embed cm-embed-block")`、`createDiv("cm-preview-code-block cm-embed-block …")`、`createDiv("cm-embed-block cm-callout")`、`toggleClass("math-block" / "cm-embed-block")`）。放大图标插进 `.embed-actions` 首位，因此自动获得「悬停显示、右上角定位、RTL 镜像」等核心行为，不需要自己写定位与显隐样式。
 - **普通围栏代码块**（语言不是 `mermaid` / `query` / 有 post-processor 的）：`P3.canRenderLang(lang)` 为假，核心**不建 widget**，只把代码留成源码行（`HyperMD-codeblock`），并在开围栏行末尾挂一个 widget `E3` —— 它的 `toDOM` 就是 `createSpan({ cls: "code-block-flair" })`，即右上角的语言名 / 点击复制 chip。它没有 `.embed-actions`，所以放大图标作为 chip 的**子节点**嵌进去（`styles.css` 的 `.text-popup-flair-action` 负责摆成行内）。
   为什么嵌进 chip 而不是当兄弟节点插到 `.cm-line` 上：CM6 的 DOMObserver 会**忽略 widget 内部的** DOM 变更（`readMutation` 里命中 widget tile 直接返回 null），而往 `.cm-line` 里塞一个它不认识的节点会被算成一次 DOM 变更、把整行标脏重渲染 —— 那会反复把按钮冲掉。
 - **图片嵌入**：容器**不是** `.cm-embed-block`（这正是最初的 `.cm-embed-block` 选择器完全扫不到图片的原因），而是核心给图片 widget 自己建的 `div.image-embed`。它内部的 `.embed-actions` 与 widget 类区块是同一套（`addActions` → `addAction` → `this.actionsEl ||= e.createDiv("embed-actions")`），所以放大图标照旧插首位、插在原生「放大」（`lucide-zoom-in`）左侧，胶囊皮肤 / 悬停显隐 / RTL 镜像全部白拿，**不需要新增任何 CSS**。注入前有三条守卫：没有 `.embed-actions` 的图片（Callout 内、行内 HTML 里的 `span.image-embed`）天然跳过，嵌入笔记（`.markdown-embed`）里的图片也跳过，**引用行**（`.cm-line.HyperMD-quote`）里的图片同样跳过（V114 起由外层引用块覆盖）—— 与扫描器「这几类不产候选」的判断保持一致。
+- **表格**（`injectTableAction`）：唯一一处**容器也要自己建**的注入点。表格 widget 的容器 `.cm-table-widget` 带 `.cm-embed-block`（所以按 `.cm-embed-block` 分类的遍历本来就扫得到它），但核心的 `addEditButton` 只有 5 个调用点（嵌入笔记 / 两种代码块 / 数学块 / HTML 块），**表格不在其中** —— 它没有现成的 `.embed-actions`。所以本插件在 `.table-wrapper` 里自己建一个 `text-popup-table-actions embed-actions` 再插按钮：`embed-actions` 用来白拿核心的定位与皮肤，`text-popup-table-actions` 用来**认领**这个容器（摘的时候要连容器一起摘，且绝不能误删核心建的 `.embed-actions`）。锚点选 `.table-wrapper`（表格本体）而不是 widget 容器：后者常被拉满行宽（实测同一张表 732px vs 347px），锚在它上面按钮会飘到编辑区右缘。给表格按钮额外补了一条 **`mousedown` 守卫**（`preventDefault` + `stopPropagation`）：表格式块内部有真实可编辑的单元格，实测只拦 `click` 时点击按钮会被顺手挪动光标。核心只在 `.cm-embed-block:hover` / `.image-embed:hover` 里显形，而表格被核心那条规则用 `:not(.cm-table-widget, …)` **显式排除**，所以 `styles.css` 里补了一条 `.cm-table-widget:hover .embed-actions { opacity: 1 }`。
 - **引用块**（`src/scanner/quote.ts`）：**唯一一处不是 DOM 注入的注入点**。引用块在实时预览里没有容器，它只是一串 `.cm-line.HyperMD-quote`（实测普通引用行上一条 `.cm-embed-block` 都没有），而往 `.cm-line` 里插的节点会被 CM6 的 DOMObserver 当成文档变更、整行重渲染时冲掉（实测 2 秒内消失）—— 与上一条「代码块 chip 必须嵌在 widget 内部」同因。所以这里走核心自己在普通行上用的那条路（对照核心的 `.code-block-flair`：它就是 `.cm-line.HyperMD-codeblock-begin` 里的一个绝对定位元素）：由一个 CM6 装饰器（`ViewPlugin` + `Decoration.widget`）承载按钮，DOM 由 CM6 托管，不会被冲掉，定位也白拿。DOM 形状仍是核心那套 `div.embed-actions > div.embed-action`，因此皮肤全部复用；核心只在 `.cm-embed-block:hover` / `.image-embed:hover` 里显形，引用块两种都不是，所以 `styles.css` 里补了一条显隐规则（悬停首行 + 由委托监听写的 `data-text-popup-hover`）。设置变更靠 `StateEffect` 重建装饰集（`notifyQuoteActionsChanged`），**且只能由设置页触发** —— 塞进 `refreshTextPopupActions` 的观察者路径会让 dispatch → 改 DOM → 观察者 → dispatch 自激。
 
-扫描是**一次 `.cm-embed-block` 遍历 + 类名分类**（`classifyBlock`），表格（`.cm-table-widget`）等不带这四类类名的区块直接跳过；另有 `.code-block-flair` 与 `.cm-content .image-embed` 两次遍历，前者只吃「放大代码块」这一个开关，后者只吃「放大图片」。引用块不在这三次遍历里 —— 它的图标随装饰器自动重算，`removeAllActions` 也要跳过它（widget 的 DOM 归 CM6 管，删了不会自己长回来）。
+扫描是**一次 `.cm-embed-block` 遍历 + 类名分类**（`classifyBlock`）：块级原始 HTML / 代码块 widget / Callout / 数学块 / **表格**共用这一次遍历，各自按类别分流（表格走 `injectTableAction`，其余走 `injectAction`）；不带这几类类名的核心区块仍直接跳过。另有 `.code-block-flair` 与 `.cm-content .image-embed` 两次遍历，前者只吃「放大代码块」这一个开关，后者只吃「放大图片」。引用块不在这三次遍历里 —— 它的图标随装饰器自动重算，`removeAllActions` 也要跳过它（widget 的 DOM 归 CM6 管，删了不会自己长回来），但要顺手清掉表格那个**本插件认领的**空容器。
 
-这些都依赖 Obsidian 的内部类名（非公开 API），升级后若图标不出现，集中修改 `src/scanner/inject.ts` 的 `injectAction` / `injectFlairAction` / `injectImageAction` 与 `src/scanner/shared.ts` 的选择器即可；引用块见 `src/scanner/quote.ts`。
+这些都依赖 Obsidian 的内部类名（非公开 API），升级后若图标不出现，集中修改 `src/scanner/inject.ts` 的 `injectAction` / `injectFlairAction` / `injectImageAction` / `injectTableAction` 与 `src/scanner/shared.ts` 的选择器即可；引用块见 `src/scanner/quote.ts`。
 
 富文本渲染走**公开 API** `MarkdownRenderer.render(app, markdown, el, sourcePath, component)`：
 
-- 传入的 markdown 分两路：手写 HTML 块传「去掉外层容器标签后的 `innerHTML`」（若直接传 `outerHTML`，字符串以 `<div>` 开头会被按 CommonMark 的 HTML block 规则整段吞掉，块内 Markdown 不会解析）；代码块 / Callout / 数学块 / 引用块直接传**区间原文**（含围栏 / `> ` 前缀 / `$$`），由 `MarkdownRenderer` 渲染成对应的原生形态 —— 引用块的原文正好渲染成一个带引用条的 `<blockquote>`，这是需求「模仿 Obsidian 显示」最省力的实现。
+- 传入的 markdown 分两路：手写 HTML 块传「去掉外层容器标签后的 `innerHTML`」（若直接传 `outerHTML`，字符串以 `<div>` 开头会被按 CommonMark 的 HTML block 规则整段吞掉，块内 Markdown 不会解析）；代码块 / Callout / 数学块 / 引用块 / **表格**直接传**区间原文**（含围栏 / `> ` 前缀 / `$$` / `|` 网格），由 `MarkdownRenderer` 渲染成对应的原生形态 —— 引用块的原文正好渲染成一个带引用条的 `<blockquote>`，表格原文以 `|` 开头、照样被认成表格（不像 `<div>` 开头那样被 HTML block 规则吞掉），这是需求「模仿 Obsidian 显示」最省力的实现。
 - 必须传一个真实的 `Component`（弹窗持有的 `component`），在 `onOpen` 里 `load()`、`onClose` 里 `unload()`；否则核心会打印 `is not passing Component` 告警，且嵌入内容的事件监听会泄漏。
 - `sourcePath` 必须传**笔记完整路径**（`TFile.path`），`[[wikilink]]` 与 `![[图片]]` 才能正确解析。
 - 内容容器加 `markdown-rendered` 类即可复用核心的标题 / 列表 / 引用 / 表格 / 代码块样式，不需要自己写 Markdown CSS。
@@ -400,11 +426,11 @@ src/
 
 - 弹窗的数据入口从「一条内容」改为 `TextPopupSource`（`size` / `sourceName` / `sourcePath` / `read(index)` / `dispose()`），由 `scanner/session.ts` 实现，弹窗只按索引惰性读取，不认识 DOM。
 - 候选集由 `blocks.ts` 的 `scanTextBlocks(editor.getValue())` 扫出：单趟扫描、命中即吃掉整段区间，因此区间天然不重叠、**外层优先**（Callout 里嵌的代码块不会另算一条，否则会出现「能翻到、但永远没有图标」的幽灵条目）。HTML 块的标签表与排除表都从 `obsidian.asar` 抄来，规则与核心对齐。**为什么不用 DOM**：Live Preview 只渲染视口附近的块，滚出视口的块连按钮都没有；以 DOM 为准会让「能翻到几条」随滚动位置、光标位置、分屏状态变化（这就是「有时 2 个、有时 4 个、有时 5 个」的根因）。数量必须是**笔记的属性**，不能是屏幕的属性。
-- 六类的**纯文本回退**分别由 `extractFencedBody` / `extractCalloutBody` / `extractMathBody` / `extractImageBody` / `extractQuoteBody` 得到（代码正文 / 去掉 `> ` 的文字 / TeX 源码 / alt 或文件名 / 去掉 `> ` 前缀的引用文字），只有手写 HTML 块才需要离屏渲染；空块不进候选，所以按方向键不会切到一屏空白。图片区的 `raw` 存的是**命中的那段图片语法**而不是整行：引用行 / 列表行的 `> ` `- ` 前缀喂给 `MarkdownRenderer` 会多渲染出一层引用块 / 列表项；引用块的 `raw` 则相反，**保留**每行的 `> ` 前缀，正好渲染成 `<blockquote>`。
+- 七类的**纯文本回退**分别由 `extractFencedBody` / `extractCalloutBody` / `extractMathBody` / `extractImageBody` / `extractQuoteBody` / `extractTableBody` 得到（代码正文 / 去掉 `> ` 的文字 / TeX 源码 / alt 或文件名 / 去掉 `> ` 前缀的引用文字 / 去掉首尾空行的表格原文），只有手写 HTML 块才需要离屏渲染；空块不进候选，所以按方向键不会切到一屏空白。表格是唯一**不去壳**的一类（`|` 网格本身就是内容，剥它就得重排对齐列宽），只有「表头每格都空且没有数据行」的纯空表才返回空串、让候选被丢掉。图片区的 `raw` 存的是**命中的那段图片语法**而不是整行：引用行 / 列表行的 `> ` `- ` 前缀喂给 `MarkdownRenderer` 会多渲染出一层引用块 / 列表项；引用块的 `raw` 则相反，**保留**每行的 `> ` 前缀，正好渲染成 `<blockquote>`。
 - 图片的**行级排除**共四条，都判在 `blocks.ts` 的 `matchImageBlock` 里（缩进 / 表格 / 行内 HTML / 行内代码），理由是同一个：**实测这四种写法核心都不建 `.image-embed`**，放进候选就是「能翻到、但永远没有图标」的幽灵条目。其中行内代码的区间由 `inlineCodeRanges` 从**笔记文本**算出（四条实测规则，见「已知限制」），命中的图片用 `firstHitOutsideCode` **跳过**而不是「整行放弃」—— 同一行里「代码里的图 + 后面的真图」时，后面那张真图必须仍是候选。
-- 候选的正文用**离屏渲染**取得：手写 HTML 的每个区间交给公开 API `sanitizeHTMLToDom`（核心 widget 自己用的就是这个函数），渲染进一个 `position: fixed; left: -10000px` 的离屏宿主，再跑原来的 `findSupportedElement` / `extractText` / `extractRichSource`。隐藏方式不能用 `display: none`：`extractText` 依赖 `innerText`，元素不参与布局时 `innerText` 会退化成 `textContent`，`<br>` 的换行会丢。另外五类是纯字符串处理，不需要离屏宿主。
+- 候选的正文用**离屏渲染**取得：手写 HTML 的每个区间交给公开 API `sanitizeHTMLToDom`（核心 widget 自己用的就是这个函数），渲染进一个 `position: fixed; left: -10000px` 的离屏宿主，再跑原来的 `findSupportedElement` / `extractText` / `extractRichSource`。隐藏方式不能用 `display: none`：`extractText` 依赖 `innerText`，元素不参与布局时 `innerText` 会退化成 `textContent`，`<br>` 的换行会丢。另外六类是纯字符串处理，不需要离屏宿主。
 - 打开时**算一次、取一次快照**：`size` 与 `read(index)` 都读同一份候选，弹窗打开期间不再重采，所以标题里的「总数 / 序号」与正文永远同源（旧实现每次切换都重采 DOM，点击后核心把光标移进块并滚动，会让数字在打开后继续变，点最后一个块还会因为越界而弹空白）。离屏宿主在 `onClose` 里通过 `source.dispose()` 移除。
-- 「点开的是第几个」用 `Editor.cm`（核心内部入口，`obsidian.d.ts` 未暴露）上的 CM6 `posAtDOM` 把块容器映射回行号，再落到区间上；失败时按内容相等兜底，再不行回第 1 条。代码块 chip / 图片 / 引用块这三处的按钮不在 `.cm-embed-block` 里，退回所在行（`.cm-line`）精确匹配区间起始行，对不上就**不开弹窗**（宁可不开，也不翻出别的块）。**这是本插件唯一新增的内部入口依赖**，与已有的 `.cm-html-embed` 类名依赖同级；只在 `locateStartIndex` 一处使用，包在 `try/catch` 里。
+- 「点开的是第几个」用 `Editor.cm`（核心内部入口，`obsidian.d.ts` 未暴露）上的 CM6 `posAtDOM` 把块容器映射回行号，再落到区间上；失败时按内容相等兜底，再不行回第 1 条。代码块 chip / 图片 / 引用块这三处的按钮不在 `.cm-embed-block` 里，退回所在行（`.cm-line`）精确匹配区间起始行，对不上就**不开弹窗**（宁可不开，也不翻出别的块）。表格的按钮在 `.cm-table-widget` 里（它带 `.cm-embed-block`），走的是「块容器 → 行号 → 落进区间」那条主路径。**这是本插件唯一新增的内部入口依赖**，与已有的 `.cm-html-embed` 类名依赖同级；只在 `locateStartIndex` 一处使用，包在 `try/catch` 里。
 - 引用块的**图标侧与候选侧同源**：两侧都用同一个 `scanTextBlocks` 与 `isKindEnabled`，图标侧额外过滤「正文为空」的引用块（`readTextBody` 返回空串），与候选侧 `createCandidate` 的判据一致 —— 「有图标必有一条候选」是本仓库的硬约束，不满足就会出现「有图标、点开没反应」的幽灵。
 - 按钮带核心约定的 `interactive-child` 类，并在 click 里 `preventDefault` + `stopPropagation`：核心在 widget 容器上挂了「点击即进入块内编辑」的延迟处理（先判 `defaultPrevented`，10ms 后才执行），拦住它就不会出现「光标跳进块、编辑器滚动、刚点的图标消失」。
 - 键位注册在 `Modal` 自带的 `this.scope` 上（`open()` 时核心已把它压进键盘栈，`close()` 时自动弹出，不会漏监听）。handler **返回 `false`** 才会让核心 `preventDefault` + `stopPropagation`，方向键不会冒泡给编辑器；`modifiers` 传 `null` 表示不限修饰键，与内置图片 lightbox 行为对齐。

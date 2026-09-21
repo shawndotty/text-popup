@@ -17,9 +17,17 @@
  * DOMObserver 当成文档变更冲掉）—— 它的图标由 `scanner/quote.ts` 的 CodeMirror 装饰器承载。
  * 本文件对它只负责「算出一条候选」，与另外五类同源。
  *
+ * 第 7 类 `table`（Markdown 表格）**有**容器：核心给表格 widget 建的容器带 `.cm-embed-block`
+ * （`cm-embed-block cm-table-widget markdown-rendered`，真机实测），所以既有遍历天然扫得到；
+ * 但它**没有** `.embed-actions`（核心的 `addEditButton` 不给表格调用），图标容器得自己建
+ * （见 scanner/inject.ts 的 `injectTableAction`）。起始判据直接复用 `convert/forward-table.ts`
+ * 的 `matchTable` —— 两处判据漂移就会产出本仓库最忌讳的「有图标却翻不到」的幽灵。
+ *
  * 为什么不用 DOM：Live Preview 只把视口附近的行渲染成 DOM，滚出视口的块连按钮都没有，
  * 于是「能翻到几条」会随滚动变化。数量必须是笔记的属性，不能是屏幕的属性。
  */
+
+import { matchTable } from './convert/forward-table';
 
 /**
  * markdown-it 的 HTML block 标签表：行首命中这些标签时按 CommonMark 类型 6 起块。
@@ -46,8 +54,8 @@ const INLINE_TAGS = new Set(
 /** 核心对这几类标签不建 widget（`obsidian.asar` 里的排除表），扫描同样跳过。 */
 const SKIPPED_TAGS = new Set(['script', 'style', 'link', 'meta', 'object', 'embed', 'webview']);
 
-/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余五类是 Obsidian 原生区块。 */
-export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image' | 'quote';
+/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余六类是 Obsidian 原生区块。 */
+export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image' | 'quote' | 'table';
 
 /** 一个可放大区间；行号 0 起，与 Editor 的行号一致。 */
 export interface TextBlockRegion {
@@ -57,6 +65,7 @@ export interface TextBlockRegion {
 	/**
 	 * 该区间的原始文本，与核心 widget 的输入一致：前四类含围栏 / `> ` 前缀 / `$$`，
 	 * 引用块含每行的 `> ` 前缀（喂给 `MarkdownRenderer` 正好渲染成一个 `<blockquote>`）；
+	 * 表格就是那几行 `| a | b |` 原文（`MarkdownRenderer` 会认出表格）；
 	 * `image` 类是**命中的那段图片语法**（不是整行 —— 引用行 / 列表行的 `> ` / `- ` 前缀
 	 * 喂给 MarkdownRenderer 会多渲染出一层引用块 / 列表项）。
 	 */
@@ -347,6 +356,37 @@ function matchImageBlock(lines: readonly string[], start: number): BlockMatch | 
 	return { kind: 'image', endLine: start, include: true, raw: hit[0] };
 }
 
+/**
+ * 表格：判据 = `convert/forward-table.ts` 的 `matchTable` + 一条**实测补丁**（第 7 类）。
+ *
+ * 为什么要复用 `matchTable`：它的主力判据（表头行必须起一个块 / 分隔行必须合法 / 数据行吃到
+ * 第一个终止行）已经与实时预览吻合（Plan-20260921-090329 §2.6 的 10 个写法实测表），另写一份
+ * 就会漂移 —— 判据一旦放宽，就会产出「候选里有一条、编辑器里却没有 `.cm-table-widget`」的
+ * 幽灵条目（点开图标都找不到）。
+ *
+ * 为什么要补一条：`matchTable` 只拒绝 **≥4 空格**的缩进（`hasCodeIndent`），而实时预览要求
+ * 表头行**顶格**。真机实测（本次落地时用探针笔记量过，整个文档都在视口内）：
+ *   - `  | a | b |` 开头（文档第一行 / 空行后 / 列表项延续，1/2/3 空格都试过）→ 没有
+ *     `.cm-table-widget`，那两行只是 `HyperMD-list-line-nobullet` 的普通文字；
+ *   - 同样内容的**顶格**写法 → 有 `.cm-table-widget`（含「列表 + 空行 + 顶格表」这种对照，
+ *     实测照样有 widget，所以判据不是「在列表里」而是「有没有前导空白」）。
+ * 不补这条就会多出一类幽灵：列表项延续的表（`- item` + 空行 + 2 空格缩进的表）在扫描器里
+ * 是一条候选，编辑器里却没有图标可点。
+ *
+ * `matchTable` 会做完整的单元格切分，扫描里只用它的 `end`（区间右边界），属于可接受的冗余。
+ * 依赖方向不成环：`convert/*` 不 import `../blocks`，只 import 同目录的 `forward-*` 与 `shared`。
+ *
+ * 排在 `matchImageBlock` **之前**：两者互斥（`matchImageBlock` 见到 `|` 开头直接返回 null），
+ * 前置只是让「表格里的图片不单独成条」这条口径不依赖那个内部守卫。
+ */
+function matchTableBlock(lines: readonly string[], start: number): BlockMatch | null {
+	if (/^[ \t]/.test(lines[start] ?? '')) return null; // 顶格才是实时预览认的表格
+	const table = matchTable(lines, start);
+	if (!table) return null;
+	// matchTable 的 end 是「表格结束后的下一行下标」，区间要的是含末行的行号
+	return { kind: 'table', endLine: table.end - 1, include: true };
+}
+
 /** 同一行的类别优先级：`$$`、围栏、`> [!`、`<tag>` 互斥；引用排在图片之前（外层优先）。 */
 const MATCHERS: ReadonlyArray<(lines: readonly string[], start: number) => BlockMatch | null> = [
 	matchMathBlock,
@@ -354,11 +394,12 @@ const MATCHERS: ReadonlyArray<(lines: readonly string[], start: number) => Block
 	matchCallout,
 	matchHtmlBlock,
 	matchQuoteBlock,
+	matchTableBlock,
 	matchImageBlock,
 ];
 
 /**
- * 单趟扫描全文，按文档顺序返回六类区间。
+ * 单趟扫描全文，按文档顺序返回七类区间。
  *
  * 命中任一起始判据就吃下整段区间，然后从区间末尾继续 —— 因此区间**天然不重叠、外层优先**。
  * 这一条是必需的，不是优化：Callout 里嵌的代码块在 Live Preview 里不会生成独立的

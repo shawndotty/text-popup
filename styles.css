@@ -59,6 +59,21 @@
 	opacity: 1;
 }
 
+/* 表格的放大图标：容器是本插件自己建的（核心不给表格建 .embed-actions，见 scanner/inject.ts
+   的 injectTableAction），位置 / 尺寸 / 默认透明度仍白拿核心的 `.markdown-source-view.mod-cm6
+   .embed-actions`（绝对定位、右上角 4px、flex、gap）与 `.embed-action`（胶囊皮肤），
+   所以这里同样只需要补「显隐」这一件事。
+
+   为什么核心那条不生效：核心的显隐规则写在 @media (hover: hover) 里，且**显式排除表格** ——
+   `app.css:12155` 的 `.cm-embed-block:not(.cm-table-widget, .cm-lang-base):hover .embed-actions`。
+   表格被那个 :not() 点名排除，自己建的容器因此永远是 opacity: 0。
+   这条特异性 (0,5,0) 压得过核心那条 `.markdown-source-view.mod-cm6 .embed-actions`（0,3,0），
+   不需要 !important。前缀与上面几条编辑器内规则同源（核心的 opacity: 0 也是同前缀）。 */
+
+.markdown-source-view.mod-cm6 .cm-table-widget:hover .embed-actions {
+	opacity: 1;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。

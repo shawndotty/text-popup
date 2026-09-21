@@ -1,6 +1,7 @@
 /**
- * 弹窗样式回归用例 —— 目前钉住两条：表格字号（V109 修复，2026-09-18）与视图缩放的 transform
- * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）。
+ * 弹窗样式回归用例 —— 目前钉住三条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
+ * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）
+ * 与表格放大图标的悬停显隐（V117，2026-09-21）。
  *
  * 背景：核心给单元格直接写了字号
  * （`.markdown-rendered td { font-size: var(--table-text-size) }`、
@@ -108,5 +109,37 @@ test('视图缩放的 transform 同时挂 scale 与平移补偿，且 translate 
 	assert.ok(
 		/transform-origin\s*:\s*0\s+0/.test(rule.body),
 		'transform-origin 必须留在 0 0（点击处左上方的内容要能滚回来，见 styles.css 的注释）',
+	);
+});
+
+/**
+ * 表格的放大图标（V117）必须有一条自己写的悬停显隐规则。
+ *
+ * 背景：核心的显隐规则写在 `@media (hover: hover)` 里，且**显式排除表格** ——
+ * `app.css:12155` 的 `.cm-embed-block:not(.cm-table-widget, .cm-lang-base):hover .embed-actions`。
+ * 表格的图标容器又是本插件自己建的（核心不给表格调 `addEditButton()`），所以没有这条规则时
+ * 容器永远停在核心给的 `opacity: 0`：图标在 DOM 里、点了也有效，但用户**看不见**。
+ *
+ * 两条纪律：
+ *   ① 必须带 `.markdown-source-view.mod-cm6` 前缀 —— 核心那条 `opacity: 0` 就是同前缀的
+ *      `.markdown-source-view.mod-cm6 .embed-actions`，不带前缀压不住（与引用块那条同源）；
+ *   ② 必须是 `:hover` 触发（悬停表格才显形，与核心对 Callout / 数学块 / 图片一致）。
+ */
+test('表格的放大图标有一条带编辑器前缀的悬停显隐规则', () => {
+	const rule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.markdown-source-view.mod-cm6') &&
+					selector.includes('.cm-table-widget') &&
+					selector.includes(':hover') &&
+					selector.includes('.embed-actions'),
+			) && /opacity\s*:\s*1/.test(entry.body),
+	);
+
+	assert.ok(
+		rule,
+		'styles.css 缺少 `.markdown-source-view.mod-cm6 .cm-table-widget:hover .embed-actions { opacity: 1 }`：' +
+			'核心那条显隐规则用 :not(.cm-table-widget) 把表格排除了，少了它表格图标永远不显形',
 	);
 });

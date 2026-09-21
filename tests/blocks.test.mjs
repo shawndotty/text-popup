@@ -1,5 +1,5 @@
 /**
- * `blocks.ts` 的行为用例 —— 六类区块的扫描与标签判定。
+ * `blocks.ts` 的行为用例 —— 七类区块的扫描与标签判定。
  *
  * 这是「能翻到几条」的事实来源：扫描结果直接决定 Live Preview 里哪些块会拿到放大图标。
  * 最需要守住的不变量是**区间不重叠、外层优先**：Callout 里嵌的代码块在核心里不生成独立的
@@ -21,6 +21,8 @@ import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const { isBlockLevelTag, scanTextBlocks } = await jiti.import('../src/blocks.ts');
+// 表格的互验对象：扫描器的 table 区间必须等于 `matchTable` 的 `[start, end - 1]`
+const { matchTable } = await jiti.import('../src/convert/forward-table.ts');
 
 /** 把扫描结果压成 `kind:startLine-endLine`，便于整段断言。 */
 function outline(text) {
@@ -348,6 +350,75 @@ test('引用块与图片混排时不重叠、按文档顺序', () => {
 			(regions[index - 1]?.endLine ?? -1) < (regions[index]?.startLine ?? -1),
 			`第 ${index} 个区间与前一个重叠`,
 		);
+	}
+});
+
+// —— 表格（第 7 类）——
+//
+// V117 新增。判据 = `convert/forward-table.ts` 的 `matchTable` + 一条**实测补丁**：
+// **表头行必须顶格**。真机实测（探针笔记整篇都在视口内，逐个写法量 `.cm-table-widget`）：
+//   - 表头行带 1 / 2 / 3 个前导空格时，实时预览**不**建 `.cm-table-widget` —— 那几行只是普通
+//     `.cm-line`（列表项延续时甚至是 `HyperMD-list-line-nobullet`）；
+//   - 同样内容顶格写就有 widget；「`- item` + 空行 + 顶格表」这个对照也有 widget，
+//     所以判据是「表头行有没有前导空白」，不是「在不在列表里」。
+// `matchTable` 只拒绝 ≥4 空格的缩进（`hasCodeIndent`），所以少了这条补丁就会出现**幽灵候选**：
+// `- item` + 空行 + 2 空格缩进的表能翻到、编辑器里却没有图标可点。
+
+test('顶格表格成区间：文档开头 / 空行后 / 标题后无空行 / 单列 / 列表后顶格', () => {
+	assert.deepEqual(outline('| a | b |\n| - | - |'), ['table:0-1'], '文档开头');
+	assert.deepEqual(outline('x\n\n| a | b |\n| - | - |'), ['table:2-3'], '空行后');
+	assert.deepEqual(outline('## T\n| a | b |\n| - | - |'), ['table:1-2'], 'ATX 标题后无空行');
+	assert.deepEqual(outline('| a |\n| - |'), ['table:0-1'], '单列表');
+	assert.deepEqual(outline('- item\n\n| a | b |\n| - | - |'), ['table:2-3'], '列表 + 空行 + 顶格表');
+});
+
+test('表格的 raw 是整段原文（保留 | 网格，末行正确）', () => {
+	const region = scanTextBlocks('x\n\n| a | b |\n| - | - |\n| 1 | 2 |')[0];
+	assert.equal(region?.kind, 'table');
+	assert.equal(region?.startLine, 2);
+	assert.equal(region?.endLine, 4, '数据行吃到第一个终止行');
+	assert.equal(region?.raw, '| a | b |\n| - | - |\n| 1 | 2 |');
+});
+
+test('实测没有 .cm-table-widget 的写法不产 table 区间', () => {
+	assert.deepEqual(outline('text\n| a | b |\n| - | - |'), [], '正文行后无空行（不成块）');
+	assert.deepEqual(outline('    | a | b |\n    | - | - |'), [], '4 空格缩进 = 缩进代码块');
+	assert.deepEqual(outline('| a |\n---'), [], '`| a |` + `---` 是 Setext 标题（单列表要写 `| - |`）');
+	assert.deepEqual(outline(' | a | b |\n | - | - |'), [], '1 空格缩进');
+	assert.deepEqual(outline('  | a | b |\n  | - | - |'), [], '2 空格缩进');
+	assert.deepEqual(outline('   | a | b |\n   | - | - |'), [], '3 空格缩进');
+	assert.deepEqual(
+		outline('- item\n\n  | a | b |\n  | - | - |'),
+		[],
+		'列表项延续（空行后 2 空格缩进）：顶层才有 widget',
+	);
+	assert.deepEqual(outline('> | a | b |\n> | - | - |'), ['quote:0-1'], '引用行里由外层引用块覆盖');
+	assert.deepEqual(outline('> [!note]\n> | a | b |\n> | - | - |'), ['callout:0-2'], 'Callout 里由外层覆盖');
+	assert.deepEqual(outline('<div>\n| a | b |\n| - | - |\n</div>'), ['html:0-3'], '裸 HTML 块里由外层覆盖');
+});
+
+test('表格区间与 matchTable 的 [start, end - 1] 逐一相等（防两份判据漂移）', () => {
+	// 全顶格样例（补丁只排除前导空白，所以两组判据在这些样例上必须逐条相同）
+	const samples = [
+		'| a | b |\n| - | - |',
+		'x\n\n| a | b |\n| - | - |',
+		'## T\n| a | b |\n| - | - |',
+		'| a |\n| - |',
+		'| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |',
+		'- item\n\n| a | b |\n| - | - |',
+		'| a | b |\n| - | - |\n\ntext\n\n| c | d |\n| - | - |',
+	];
+	for (const text of samples) {
+		const lines = text.split('\n');
+		const expected = [];
+		for (let start = 0; start < lines.length; start++) {
+			const table = matchTable(lines, start);
+			if (table) expected.push(`${start}-${table.end - 1}`);
+		}
+		const actual = scanTextBlocks(text)
+			.filter((region) => region.kind === 'table')
+			.map((region) => `${region.startLine}-${region.endLine}`);
+		assert.deepEqual(actual, expected, `样例：${JSON.stringify(text)}`);
 	}
 });
 

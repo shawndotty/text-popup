@@ -13,6 +13,7 @@ import {
 	extractMathBody,
 	extractQuoteBody,
 	extractRichSource,
+	extractTableBody,
 	extractText,
 } from '../extract';
 import { TextPopupModal } from '../modal';
@@ -111,7 +112,7 @@ function locateStartIndex(
 /**
  * 组装一次弹窗会话的导航来源。
  *
- * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，六类区间按类别开关过滤），不是 DOM：
+ * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，七类区间按类别开关过滤），不是 DOM：
  * Live Preview 只渲染视口附近的块，以 DOM 为准会让「总数」随滚动 / 光标 / 分屏变化。
  * 打开时算一次、提取一次，弹窗打开期间不再重采 —— 标题的总数与正文永远同源。
  */
@@ -202,7 +203,7 @@ function buildPopupSession(
  * 一个区间 → 一个候选；内容为空（点了会弹空白屏）时返回 null。
  *
  * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素。
- * 另外五类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
+ * 另外六类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
  * 只有真的遇到 html 区间才会建出那个游离节点。
  */
 function createCandidate(
@@ -239,7 +240,7 @@ function createCandidate(
 	};
 }
 
-/** 五类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
+/** 六类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
 export function readTextBody(region: TextBlockRegion): string {
 	switch (region.kind) {
 		case 'code':
@@ -252,6 +253,8 @@ export function readTextBody(region: TextBlockRegion): string {
 			return extractImageBody(region.raw);
 		case 'quote':
 			return extractQuoteBody(region.raw);
+		case 'table':
+			return extractTableBody(region.raw);
 		default:
 			return '';
 	}

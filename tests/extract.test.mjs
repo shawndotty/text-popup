@@ -1,8 +1,9 @@
 /**
- * `extract.ts` 的正文提取用例 —— 围栏代码块 / Callout / 引用块 / 数学块的「去壳」。
+ * `extract.ts` 的正文提取用例 —— 围栏代码块 / Callout / 引用块 / 数学块 / 表格的「去壳」。
  *
  * 这些函数只在「关闭富文本渲染」的纯文本回退路径上使用（打开时弹窗直接回灌区间原文，
  * 交给 MarkdownRenderer 渲染），所以它们的职责很窄：把壳去掉、把首尾空白收掉。
+ * 表格是唯一「不去壳」的一类（`|` 网格本身就是内容），它只做去首尾空行 + 空表判空。
  *
  * 刻意没测：`extractText` 与 `extractRichSource`。两者依赖真实布局（`innerText`、`cloneNode`
  * 后的 `innerHTML` 与去缩进），在 Node 里造不出可信的等价物 —— 硬塞假 DOM 会变成「测假 DOM」。
@@ -14,8 +15,14 @@ import test from 'node:test';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
-const { extractCalloutBody, extractFencedBody, extractImageBody, extractMathBody, extractQuoteBody } =
-	await jiti.import('../src/extract.ts');
+const {
+	extractCalloutBody,
+	extractFencedBody,
+	extractImageBody,
+	extractMathBody,
+	extractQuoteBody,
+	extractTableBody,
+} = await jiti.import('../src/extract.ts');
 
 // —— extractFencedBody ——
 
@@ -119,4 +126,32 @@ test('路径形态取 alt', () => {
 
 test('没有 alt 时原样返回（返回空串会让候选被当成空块丢掉）', () => {
 	assert.equal(extractImageBody('![](p.png)'), '![](p.png)');
+});
+
+// —— extractTableBody ——
+//
+// V117：与另外五类相反 —— 表格**不去壳**。它们剥掉的是纯语法噪音（围栏 / `> ` / `$$`），
+// 而 `|` 网格本身就是可读内容；要剥就得重排对齐列宽，收益低、易出 bug。
+// 唯一例外是「一眼空」的表：只有表头行 + 分隔行、且表头每格都空 → 返回空串让候选被丢掉
+// （`createCandidate` 见空即 null），与「只有 `> ` 的空引用块不产候选」同一口径。
+
+test('表格去掉首尾空行，保留 | 网格', () => {
+	assert.equal(extractTableBody('| a | b |\n| - | - |'), '| a | b |\n| - | - |', '原样');
+	assert.equal(
+		extractTableBody('\n| a | b |\n| - | - |\n\n'),
+		'| a | b |\n| - | - |',
+		'去首尾空行',
+	);
+	assert.equal(extractTableBody('| a | b |\n| - | - |\n| 1 | 2 |').split('\n').length, 3, '数据行都在');
+});
+
+test('纯空表（表头每格都空且无数据行）返回空串，候选会被丢掉', () => {
+	assert.equal(extractTableBody('|  |  |\n| - | - |'), '', '两列全空');
+	assert.equal(extractTableBody('||\n|-|'), '', '单列全空');
+	assert.equal(extractTableBody('\n| |\n| - |\n'), '', '带空行的全空');
+});
+
+test('表头有字或有数据行时不算空表（返回原文）', () => {
+	assert.equal(extractTableBody('| a |\n| - |'), '| a |\n| - |', '表头有字、无数据行');
+	assert.equal(extractTableBody('|  |\n| - |\n| x |'), '|  |\n| - |\n| x |', '表头空但有数据行');
 });

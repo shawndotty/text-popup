@@ -1,8 +1,10 @@
 /**
- * scanner 模块的图标注入与移除：在四类区块的控制栏里插入放大图标。
+ * scanner 模块的图标注入与移除：在各类区块的控制栏里插入放大图标。
  *
- * 四处锚点里，前两处是「往核心建好的容器 / chip 里插节点」，第三处是图片嵌入，
- * 第四处（引用块）不走 DOM —— 唯一由 CM6 装饰器托管的一处，见 `scanner/quote.ts`。
+ * 五处锚点里，前三处是「往核心建好的容器 / chip 里插节点」（`.cm-embed-block` 内的
+ * `.embed-actions`、代码块 chip、图片的 `.embed-actions`），第四处是表格（容器由本插件
+ * 自己在 `.table-wrapper` 里建），第五处（引用块）不走 DOM —— 唯一由 CM6 装饰器托管的一处，
+ * 见 `scanner/quote.ts`。
  */
 
 import { setIcon } from 'obsidian';
@@ -14,12 +16,26 @@ import {
 	ACTION_CLASS,
 	ACTIONS_SELECTOR,
 	FLAIR_ACTION_CLASS,
+	TABLE_ACTIONS_CLASS,
 	type TextPopupHost,
 } from './shared';
 
 /** 摘掉某个区块上的按钮（标签列表改小、或该类别被关掉时使用）。 */
 export function removeAction(blockEl: HTMLElement): void {
 	blockEl.querySelector<HTMLElement>(`:scope > .embed-actions > .${ACTION_CLASS}`)?.remove();
+}
+
+/**
+ * 摘掉表格上的按钮 —— 连**自建的容器**一起删。
+ *
+ * 不能复用 `removeAction`：它的判据（`:scope > .embed-actions > .text-popup-action`）对表格
+ * 不成立（容器在 `.table-wrapper` 里），会出现「关掉开关图标还在」。整容器一起删还顺手解决
+ * 了「只删按钮会留下一个空的 `.embed-actions` 壳」。
+ */
+export function removeTableAction(tableEl: HTMLElement): void {
+	tableEl
+		.querySelector<HTMLElement>(`:scope > .table-wrapper > .${TABLE_ACTIONS_CLASS}`)
+		?.remove();
 }
 
 /** 摘掉代码块 chip 里的按钮。 */
@@ -70,6 +86,55 @@ export function injectImageAction(imageEl: HTMLElement, host: TextPopupHost): vo
 }
 
 /**
+ * 往 Markdown 表格的右上角注入放大图标。
+ *
+ * 表格是「容器在、图标容器不在」的一处：`.cm-table-widget` 本身带 `.cm-embed-block`
+ * （所以既有遍历扫得到），但核心不给表格调 `addEditButton()`，它没有现成的 `.embed-actions`。
+ * 所以这里自己建一个 —— 容器 class 写成 `text-popup-table-actions embed-actions`：前者用来
+ * **认领**（摘的时候要连容器一起摘），后者用来白拿核心的皮肤（绝对定位 / 右上角 4px / flex /
+ * gap / 默认 `opacity: 0`）与 `.embed-action` 的胶囊样式，不需要新增任何外观 CSS
+ * （只有「悬停显形」那一条要补，见 styles.css —— 核心的显隐规则显式 `:not(.cm-table-widget)`）。
+ *
+ * 锚点是 `.table-wrapper`（表格本体）而不是 widget 容器：后者常被拉满行宽（实测 732px vs
+ * 表格 347px），锚在它上面按钮会飘到编辑区右缘、离表格很远；且它是 `overflow-x: auto` 的
+ * 滚动区，宽表格时按钮会随内容横向滚动。
+ *
+ * 形态变了（找不到 `.table-wrapper`）就**不注入**，绝不退化成别的锚点 —— 挂了按钮却没候选
+ * （或反过来）就是本仓库最忌讳的幽灵条目。
+ */
+export function injectTableAction(tableEl: HTMLElement, host: TextPopupHost): void {
+	const wrapper = tableEl.querySelector<HTMLElement>(':scope > .table-wrapper');
+	if (!wrapper) return;
+
+	let actionsEl = wrapper.querySelector<HTMLElement>(`:scope > .${TABLE_ACTIONS_CLASS}`);
+	if (!actionsEl) actionsEl = wrapper.createDiv(`${TABLE_ACTIONS_CLASS} embed-actions`);
+	// 幂等判据：按钮已存在就跳过（`render()` 重建后容器没了，这里会自动补回）
+	if (actionsEl.querySelector<HTMLElement>(`:scope > .${ACTION_CLASS}`)) return;
+
+	const actionEl = createActionEl(actionsEl, host, 'embed-action');
+	guardMouseDown(actionEl);
+	// 插首位：与另外几处一致，保证重复注入 / 重建后的位置稳定
+	actionsEl.insertBefore(actionEl, actionsEl.firstChild);
+}
+
+/**
+ * 表格按钮独有的 `mousedown` 守卫（**不**加进 `createActionEl`）。
+ *
+ * 真机 A/B（`dev:cdp` 派真实鼠标点击）实测：表格是本插件唯一会被「顺手挪光标」的锚点 ——
+ * 只拦 `click` 时点击按钮会把光标在同一行内挪 2 个字符（表格 widget 内部有真实可编辑的单元格，
+ * `posAtCoords` 能把点击点映射回文档）；同一个按钮再拦 `mousedown` 后光标不动。另外四处锚点
+ * 实测都不需要（例如既有 HTML 块的按钮只拦 `click` 就不挪光标），所以只在这里补。
+ *
+ * 代价：鼠标按下不再给按钮聚焦（键盘 `Tab` 停留 + `Enter` 仍可用）。
+ */
+function guardMouseDown(actionEl: HTMLElement): void {
+	actionEl.addEventListener('mousedown', (evt) => {
+		evt.preventDefault();
+		evt.stopPropagation();
+	});
+}
+
+/**
  * 往普通代码块右上角的 chip（`.code-block-flair`）里注入放大图标。
  *
  * 与 `.embed-actions` 版本的区别只有锚点：chip 里没有图标槽位，所以按钮是 chip 的**子节点**
@@ -85,7 +150,8 @@ export function injectFlairAction(flairEl: HTMLElement, host: TextPopupHost): vo
 }
 
 /**
- * 建按钮并接好交互 —— 四处锚点共用（引用块那一处是唯一不注入 DOM 的，见 `scanner/quote.ts`）。
+ * 建按钮并接好交互 —— 五处锚点共用（引用块那一处是唯一不注入 DOM 的，见 `scanner/quote.ts`；
+ * 表格那处额外补一条 `mousedown` 守卫，见 `guardMouseDown`）。
  *
  * `inline` 用 span：代码块 chip 是行内的 `display: inline-block`，div 会在里面另起一行。
  * interactive-child 是核心约定的「交互子元素」标记：核心的点击接管与双击进块都会跳过它。

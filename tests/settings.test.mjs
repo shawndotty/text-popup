@@ -55,7 +55,14 @@ test('老 data.json 缺 blockKinds / 包裹标签时逐项补齐', () => {
 
 test('blockKinds 缺键时逐键回落，已有的键保留', () => {
 	const settings = normalizeSettings({ blockKinds: { math: false } });
-	assert.deepEqual(settings.blockKinds, { code: true, callout: true, math: false, image: true, quote: true });
+	assert.deepEqual(settings.blockKinds, {
+		code: true,
+		callout: true,
+		math: false,
+		image: true,
+		quote: true,
+		table: true,
+	});
 });
 
 // —— 图片开关（V112） ——
@@ -83,6 +90,41 @@ test('老 data.json（没有 quote 键）升级后自动补 true，不需要迁�
 		normalizeSettings({ blockKinds: { code: true, callout: true, math: true, image: true } }).blockKinds.quote,
 		true,
 	);
+});
+
+// —— 表格开关（V117） ——
+
+test('table 开关默认开启，显式关闭时被保留', () => {
+	assert.equal(DEFAULT_SETTINGS.blockKinds.table, true, '默认开启');
+	assert.equal(normalizeSettings({ blockKinds: { table: false } }).blockKinds.table, false, '关掉被保留');
+});
+
+test('老 data.json（没有 table 键）升级后自动补 true，不需要迁移脚本', () => {
+	// 落地前的 data.json 就属于这一种：只有 code / callout / math / image / quote 五个键
+	assert.equal(
+		normalizeSettings({
+			blockKinds: { code: true, callout: true, math: true, image: true, quote: true },
+		}).blockKinds.table,
+		true,
+	);
+	assert.equal(normalizeSettings({ blockKinds: 42 }).blockKinds.table, true, '类型不对也补默认');
+});
+
+test('读 / 写：blockKinds.table 走嵌套路径，与其它键互不影响', () => {
+	const settings = normalizeSettings(undefined);
+	const blockKinds = settings.blockKinds;
+	assert.equal(readSettingValue(settings, 'blockKinds.table'), true, '默认值');
+	assert.equal(writeSettingValue(settings, 'blockKinds.table', false), true, '有改动');
+	assert.equal(settings.blockKinds, blockKinds, '对象引用不变');
+	assert.equal(blockKinds.table, false);
+	assert.equal(blockKinds.quote, true, '其它键不受影响');
+	assert.equal(readSettingValue(settings, 'blockKinds.table'), false, '读回来是关');
+	assert.equal(writeSettingValue(settings, 'blockKinds.table', false), false, '同一个值再写一次不算改动');
+});
+
+test('副作用表：表格开关只刷新图标（与 code / callout / math / image 同类）', () => {
+	assert.deepEqual([...settingSideEffects('blockKinds.table')], ['refreshActions']);
+	assert.ok(!settingSideEffects('blockKinds.table').includes('quoteActions'), '表格不重建装饰集');
 });
 
 // —— 数值回落 ——

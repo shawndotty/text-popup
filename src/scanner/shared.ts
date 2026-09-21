@@ -19,13 +19,24 @@ import type { TextPopupSettings } from '../settings';
  *                       普通语言如 `typescript` 不建 widget，见 CODE_FLAIR_SELECTOR）
  *   - Callout        → `createDiv("cm-embed-block cm-callout")`（`L3` 传入的 clazz）
  *   - 数学块         → `"math"` + `toggleClass("math-block" / "cm-embed-block")`
- * 表格（`.cm-table-widget`）等核心区块不带上面任何一个类名，由 `classifyBlock` 返回 null 过滤掉。
+ * 表格（`.cm-table-widget`）**同样**带这条类名（真机实测容器 class = `cm-embed-block
+ * cm-table-widget markdown-rendered`），所以既有遍历本来就扫得到它；但核心没给表格调
+ * `addEditButton()`，它**没有**现成的 `.embed-actions` —— 图标容器由本插件自己建
+ * （见 inject.ts 的 `injectTableAction`）。其余核心区块（如 `.cm-lang-base`）仍由
+ * `classifyBlock` 返回 null 过滤掉。
  * 图片嵌入**不在**这条选择器里（它的容器是 `.image-embed`），单独走 `IMAGE_SELECTOR`。
  */
 export const BLOCK_SELECTOR = '.cm-embed-block';
 export const ACTIONS_SELECTOR = ':scope > .embed-actions';
 export const ACTION_CLASS = 'text-popup-action';
 export const FLAIR_ACTION_CLASS = 'text-popup-flair-action';
+
+/**
+ * 表格的图标容器类名：`embed-actions` 用来复核心的皮肤（绝对定位 / 右上角 4px / flex / gap /
+ * 默认透明），`text-popup-table-actions` 用来**认领**这个容器 —— 摘按钮时要连容器一起摘，
+ * 且绝不能误删核心自己建的 `.embed-actions`。
+ */
+export const TABLE_ACTIONS_CLASS = 'text-popup-table-actions';
 
 /**
  * 第二处注入点：普通围栏代码块右上角的「语言名 / 复制」chip。
@@ -48,6 +59,17 @@ export const IMAGE_SELECTOR = '.cm-content .image-embed';
  * 这里只留下「怎么认出一条引用行」的类名与它的容器类名。
  */
 export const QUOTE_LINE_SELECTOR = '.cm-line.HyperMD-quote';
+
+/**
+ * 第五处注入点：Markdown 表格（容器是 `.cm-table-widget`，**带** `.cm-embed-block`）。
+ *
+ * 它是唯一「容器在、图标容器不在」的一处：核心不给表格调 `addEditButton()`，所以没有现成的
+ * `.embed-actions` 可插，由本插件在 `.table-wrapper` 里自己建一个（见 inject.ts 的
+ * `injectTableAction`）。锚在 `.table-wrapper` 而不是 widget 容器：后者常被拉满行宽
+ * （实测 732px vs 表格 347px），按钮会飘到编辑区右缘。
+ */
+export const TABLE_WIDGET_CLASS = 'cm-table-widget';
+
 /** 离屏测量容器的类名（弹窗打开期间存在，关闭时移除）。 */
 export const MEASURE_CLASS = 'text-popup-measure';
 export const SCAN_DEBOUNCE_MS = 150;
@@ -88,14 +110,16 @@ export interface PopupCandidate {
 export type EditorViewLike = { posAtDOM(node: Node, offset?: number): number };
 
 /**
- * 容器 → 类别；不属于这条路支持的四类时返回 null（表格等核心区块不参与）。
- * 图片嵌入不经过这里（容器是 `.image-embed`，见 `IMAGE_SELECTOR`）。
+ * 容器 → 类别；不属于这条路支持的类别时返回 null（其余核心区块仍不参与）。
+ * 图片嵌入不经过这里（容器是 `.image-embed`，见 `IMAGE_SELECTOR`）；
+ * 表格容器带 `.cm-embed-block`，所以走这里分类（它的注入锚点另在 `.table-wrapper`）。
  */
 export function classifyBlock(blockEl: HTMLElement): BlockKind | null {
 	if (blockEl.classList.contains('cm-html-embed')) return 'html';
 	if (blockEl.classList.contains('cm-preview-code-block')) return 'code';
 	if (blockEl.classList.contains('cm-callout')) return 'callout';
 	if (blockEl.classList.contains('math-block')) return 'math';
+	if (blockEl.classList.contains(TABLE_WIDGET_CLASS)) return 'table';
 	return null;
 }
 

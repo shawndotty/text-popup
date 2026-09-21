@@ -1,4 +1,5 @@
 import { WIKI_EMBED } from './blocks';
+import { matchTable } from './convert/forward-table';
 
 /**
  * 从被标记的元素里取出用于放大的纯文本。
@@ -105,6 +106,29 @@ export function extractImageBody(raw: string): string {
 	}
 	const alt = /^!\[([^\]\n]*)\]/.exec(raw)?.[1]?.split('|')[0]?.trim();
 	return alt || raw;
+}
+
+/**
+ * 表格的纯文本回退：去掉首尾空行后**返回原文**，保留 `|` 网格。
+ *
+ * 与另外五类的取舍不同：它们剥掉的是「纯语法噪音」（围栏 / `> ` / `$$`），而表格的 `|` 网格
+ * 本身就是可读内容 —— 要剥就得重排对齐列宽，收益低、易出 bug；原文在任何编辑器里都读得通。
+ *
+ * 唯一例外是「一眼空」的表（只有表头行 + 分隔行、且表头每格都空）：返回空串让候选被丢掉
+ * （`createCandidate` 见空即 null），与「只有 `> ` 的空引用块不产候选」同一口径 —— 否则点开
+ * 图标会是一屏空白。判据复用 `matchTable`，不另写一份解析。
+ */
+export function extractTableBody(raw: string): string {
+	const lines = raw.split('\n');
+	while (lines.length > 0 && !(lines[0] ?? '').trim()) lines.shift();
+	while (lines.length > 0 && !(lines[lines.length - 1] ?? '').trim()) lines.pop();
+
+	// start = 0 时 matchTable 跳过「必须起一个块」那条（区间本来就是从块首切出来的）
+	const table = matchTable(lines, 0);
+	if (table && table.rows.length === 0 && table.header.every((cell) => cell.trim() === '')) {
+		return '';
+	}
+	return lines.join('\n');
 }
 
 /** 去首尾空行 + 按最小缩进整体左移（只左移，不吞内容）。 */

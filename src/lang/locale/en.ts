@@ -26,6 +26,9 @@ export default {
 	'Magnify quotes': 'Magnify quotes',
 	'Show a magnifier icon for blockquotes in Live Preview.':
 		'Show a magnifier icon for blockquotes in Live Preview.',
+	'Magnify tables': 'Magnify tables',
+	'Show a magnifier icon for Markdown tables in Live Preview.':
+		'Show a magnifier icon for Markdown tables in Live Preview.',
 	'Popup content': 'Popup content',
 	'Render HTML and Markdown': 'Render HTML and Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":

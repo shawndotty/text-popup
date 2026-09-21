@@ -6,8 +6,11 @@ import type TextPopupPlugin from './main';
 import { notifyQuoteActionsChanged, refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
 
-/** 五类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
-export type BlockKindSettings = Record<'code' | 'callout' | 'math' | 'image' | 'quote', boolean>;
+/** 六类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
+export type BlockKindSettings = Record<
+	'code' | 'callout' | 'math' | 'image' | 'quote' | 'table',
+	boolean
+>;
 
 export interface TextPopupSettings {
 	/** 是否在实时预览中显示放大图标。 */
@@ -22,7 +25,7 @@ export interface TextPopupSettings {
 	popupFontSize: number;
 	/** 被标记时触发放大的标签列表（设置页可编辑）。 */
 	supportedTags: string[];
-	/** 代码块 / Callout / 数学块 / 图片 / 引用块是否显示放大图标。 */
+	/** 代码块 / Callout / 数学块 / 图片 / 引用块 / 表格是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
 	/** `Popup Selected Text` 包裹单行选区用的标签；必须是 supportedTags 里的块级标签。 */
 	singleLineTag: string;
@@ -42,7 +45,7 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupTextColor: '',
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
-	blockKinds: { code: true, callout: true, math: true, image: true, quote: true },
+	blockKinds: { code: true, callout: true, math: true, image: true, quote: true, table: true },
 	singleLineTag: 'p',
 	multiLineTag: 'div',
 };
@@ -82,6 +85,7 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 		math: readBoolean(data.math, DEFAULT_SETTINGS.blockKinds.math),
 		image: readBoolean(data.image, DEFAULT_SETTINGS.blockKinds.image),
 		quote: readBoolean(data.quote, DEFAULT_SETTINGS.blockKinds.quote),
+		table: readBoolean(data.table, DEFAULT_SETTINGS.blockKinds.table),
 	};
 }
 
@@ -156,6 +160,7 @@ export type SettingKey =
 	| 'blockKinds.math'
 	| 'blockKinds.image'
 	| 'blockKinds.quote'
+	| 'blockKinds.table'
 	| 'popupBackgroundFollowTheme'
 	| 'popupBackgroundColor'
 	| 'popupTextFollowTheme'
@@ -172,7 +177,7 @@ const NO_EFFECTS: readonly SettingEffect[] = [];
 
 /**
  * 副作用表（照抄改造前 `display()` 里 13 个 `onChange` 的行为，不加不减）：
- * `enabled` 与 5 个 `blockKinds.*` 要立刻同步图标，`quote` 另发一次装饰集信号，
+ * `enabled` 与 6 个 `blockKinds.*` 要立刻同步图标，`quote` 另发一次装饰集信号，
  * `supportedTags` 还要重建定义（两个下拉的选项要跟着变），其余键只保存。
  */
 export function settingSideEffects(key: SettingKey): readonly SettingEffect[] {
@@ -185,6 +190,7 @@ export function settingSideEffects(key: SettingKey): readonly SettingEffect[] {
 		case 'blockKinds.callout':
 		case 'blockKinds.math':
 		case 'blockKinds.image':
+		case 'blockKinds.table':
 			return ['refreshActions'];
 		case 'supportedTags':
 			return ['refreshActions', 'rebuildDefinitions'];
@@ -206,6 +212,8 @@ export function readSettingValue(settings: TextPopupSettings, key: SettingKey): 
 			return settings.blockKinds.image;
 		case 'blockKinds.quote':
 			return settings.blockKinds.quote;
+		case 'blockKinds.table':
+			return settings.blockKinds.table;
 		// 空字符串 = 跟随主题；颜色控件表示不了空值，跟随主题时就给备用色
 		case 'popupBackgroundFollowTheme':
 			return settings.popupBackgroundColor === '';
@@ -269,6 +277,8 @@ export function writeSettingValue(
 			return assignBlockKind(settings, 'image', value);
 		case 'blockKinds.quote':
 			return assignBlockKind(settings, 'quote', value);
+		case 'blockKinds.table':
+			return assignBlockKind(settings, 'table', value);
 		case 'supportedTags':
 			return assignSupportedTags(settings, value);
 	}
@@ -357,7 +367,7 @@ export class TextPopupSettingTab extends PluginSettingTab {
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		const settings = this.plugin.settings;
-		// 总开关关掉时把 5 个分类开关置灰（比藏起来好：设置搜索仍能找到，也能看出它们为什么点不动）
+		// 总开关关掉时把 6 个分类开关置灰（比藏起来好：设置搜索仍能找到，也能看出它们为什么点不动）
 		const blockKindDisabled = (): boolean => !settings.enabled;
 		// 「跟随主题」时色块行不显示；框架在每次改动后会重算 visible，所以不必手动重绘
 		const backgroundFilled = (): boolean => settings.popupBackgroundColor !== '';
@@ -397,6 +407,11 @@ export class TextPopupSettingTab extends PluginSettingTab {
 						name: t('Magnify quotes'),
 						desc: t('Show a magnifier icon for blockquotes in Live Preview.'),
 						control: { type: 'toggle', key: 'blockKinds.quote', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify tables'),
+						desc: t('Show a magnifier icon for Markdown tables in Live Preview.'),
+						control: { type: 'toggle', key: 'blockKinds.table', disabled: blockKindDisabled },
 					},
 				],
 			},
