@@ -1,1 +1,1 @@
-- add support for markdwon table block
+- optimize image showing style
