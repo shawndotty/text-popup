@@ -137,6 +137,11 @@
 	min-height: 0;
 	overflow: auto;
 	padding: var(--size-4-16);
+	/* 图片「可用高度」的参照（见下面 .is-rich img 的 max-height: 100cqh）。
+	   .text-popup-content 的高是 .modal-content 的 flex 分出来的、与内容无关，
+	   所以这里加 contain: size 不会改变它自己的尺寸（真机实测加与不加都是 1481×833），
+	   只是让 cqh 有一个确定的参照物。 */
+	container-type: size;
 }
 
 .mod-text-popup .text-popup-content:has(img) {
@@ -200,8 +205,32 @@
 	overflow-wrap: break-word;
 }
 
+/* 图片：与核心 lightbox 同口径——按可用高度整体装下（等比、不放大），并忽略 Markdown 尺寸语法。
+   ① max-height 的参照必须是容器查询单位 cqh（= .text-popup-content 内容盒高）：图片的包含块是
+      正文里的 <p>、高度 auto，写百分比会解析成 none、等于没写（核心能写 100% 是因为 .media-wrapper
+      明写了 height: 100%）。
+   ② width/height: auto 用来压掉核心按尺寸语法写在 img 上的 width / height **属性**——那是
+      presentational hint，权重低于样式表规则，所以不需要 !important。对比 mermaid 必须 !important，
+      因为那里写的是内联 style。 */
 .mod-text-popup .text-popup-text.is-rich img {
 	max-width: 100%;
+	max-height: 100cqh;
+	width: auto;
+	height: auto;
+}
+
+/* 正文只有一张图（图片条目的常态）时，把行盒与内联盒的「字体降部」清掉。
+   不清的话「图片刚好按可用高度装下」仍会多出 7~13px 的可滚动空白：
+   <p><img></p> 多 13px（行盒算了字体降部）、<p><span class="image-embed"><img></span></p>
+   多 7px（行内 span 的内容区有 7px 落在基线下方、越过行盒）。line-height 对行内 span 的
+   内容区无效，所以第二种形态要再把这个 span 变成块级。 */
+.mod-text-popup .text-popup-text.is-rich > p:only-child:has(> img:only-child),
+.mod-text-popup .text-popup-text.is-rich > p:only-child:has(> .image-embed:only-child) {
+	line-height: 0;
+}
+
+.mod-text-popup .text-popup-text.is-rich > p:only-child > .image-embed:only-child {
+	display: block;
 }
 
 /* 弹窗不是真实文件行，任务列表复选框没有可回写的行号，禁掉交互避免误点 */

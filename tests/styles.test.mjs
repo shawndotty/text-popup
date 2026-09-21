@@ -1,7 +1,7 @@
 /**
- * 弹窗样式回归用例 —— 目前钉住三条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
- * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）
- * 与表格放大图标的悬停显隐（V117，2026-09-21）。
+ * 弹窗样式回归用例 —— 目前钉住四条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
+ * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）、
+ * 表格放大图标的悬停显隐（V117，2026-09-21）与弹窗图片的尺寸口径（V118，2026-09-21）。
  *
  * 背景：核心给单元格直接写了字号
  * （`.markdown-rendered td { font-size: var(--table-text-size) }`、
@@ -141,5 +141,58 @@ test('表格的放大图标有一条带编辑器前缀的悬停显隐规则', ()
 		rule,
 		'styles.css 缺少 `.markdown-source-view.mod-cm6 .cm-table-widget:hover .embed-actions { opacity: 1 }`：' +
 			'核心那条显隐规则用 :not(.cm-table-widget) 把表格排除了，少了它表格图标永远不显形',
+	);
+});
+
+/**
+ * 弹窗图片必须与核心 lightbox 同口径：按可用高度**装下**（不滚）、且忽略 Markdown 尺寸语法。
+ *
+ * 两条病症（用户 V118 报的）都在这条断言里：
+ *   ① 删掉 `max-height` → 回到「只按宽度铺满、纵向要往下滚」（1210×1009 的图实测要滚 189px）；
+ *   ② 删掉 `width/height: auto` → 核心按尺寸语法写在 img 上的 width / height 属性又生效
+ *      （`|600x200` 会渲染成 600×200，比例被压坏）。
+ * `max-height` 用 `100cqh` 而不是 `100%`：图片的包含块是正文里的 `<p>`、高度 auto，百分比会解析成
+ * none（核心能写 100% 是因为 .media-wrapper 明写了 height: 100%）。所以还必须有第二条：
+ *   `.text-popup-content` 上的 `container-type: size` —— 丢了它 `cqh` 的参照会退回**视口**（离屏实测
+ *   400px 高的宿主里 max-height 算成 833.333px、图片当场溢出）。今天弹窗恰好铺满窗口所以数值碰巧相等，
+ *   一旦弹窗不再铺满（或控制条不再隐藏）图片就会按视口高算歪。
+ *
+ * 尺寸类的判据靠真机核对（本仓库没有能跑真实样式的 DOM 环境，见文件头），这里只钉住「CSS 是否还在」。
+ */
+test('弹窗图片按可用高度装下并忽略尺寸语法，且 cqh 的参照物仍在', () => {
+	const imgRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.mod-text-popup') &&
+					selector.includes('.is-rich') &&
+					hasTagToken(selector, 'img'),
+			) && /max-width\s*:/.test(entry.body),
+	);
+	assert.ok(imgRule, 'styles.css 里找不到 `.mod-text-popup .text-popup-text.is-rich img` 的尺寸规则');
+
+	assert.ok(
+		/max-height\s*:\s*[^;]*cqh/.test(imgRule.body),
+		'图片规则缺少 `max-height: 100cqh`：没有高度约束会退回「只按宽度铺满、纵向要往下滚」',
+	);
+	assert.ok(
+		/width\s*:\s*auto/.test(imgRule.body) && /height\s*:\s*auto/.test(imgRule.body),
+		'图片规则缺少 `width/height: auto`：核心按 Markdown 尺寸语法写在 img 上的属性会重新生效（|600x200 会变形）',
+	);
+	assert.ok(
+		imgRule.selectors.every((selector) => selector.includes('.mod-text-popup')),
+		'图片尺寸规则必须带 .mod-text-popup 作用域，否则会波及编辑器与阅读视图里的图片',
+	);
+
+	const containerRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) => selector.includes('.mod-text-popup') && selector.includes('.text-popup-content'),
+			) && /container-type\s*:\s*size/.test(entry.body),
+	);
+	assert.ok(
+		containerRule,
+		'`.mod-text-popup .text-popup-content` 缺少 `container-type: size`：`100cqh` 的参照会退回视口，' +
+			'弹窗不铺满一屏时图片就会按视口高度算歪',
 	);
 });
