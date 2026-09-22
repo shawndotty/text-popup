@@ -1,7 +1,8 @@
 /**
- * 弹窗样式回归用例 —— 目前钉住四条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
+ * 弹窗样式回归用例 —— 目前钉住五条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
  * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）、
- * 表格放大图标的悬停显隐（V117，2026-09-21）与弹窗图片的尺寸口径（V118，2026-09-21）。
+ * 表格放大图标的悬停显隐（V117，2026-09-21）、弹窗图片的尺寸口径（V118，2026-09-21）
+ * 与 Canvas 嵌入那两条（V119，2026-09-22）。
  *
  * 背景：核心给单元格直接写了字号
  * （`.markdown-rendered td { font-size: var(--table-text-size) }`、
@@ -194,5 +195,52 @@ test('弹窗图片按可用高度装下并忽略尺寸语法，且 cqh 的参照
 		containerRule,
 		'`.mod-text-popup .text-popup-content` 缺少 `container-type: size`：`100cqh` 的参照会退回视口，' +
 			'弹窗不铺满一屏时图片就会按视口高度算歪',
+	);
+});
+
+/**
+ * Canvas 嵌入的放大图标（V119）必须有自己的**定位基准**与**悬停显隐** —— 与 Excalidraw 那类不同，
+ * Canvas 这两条核心一条都没给（Excalidraw 的 `.image-embed` 自带 `position: relative`、
+ * 也在核心的悬停规则里，零 CSS 即可）。
+ *
+ * 两条缺失各自的病症（真机实测）：
+ *   ① 丢 `position: relative` → 容器补上核心的 `position: absolute` 后会以**最近的定位祖先**
+ *      为基准 —— 实测是 `.cm-scroller`，按钮贴到整个滚动区右上角（画布恰好占满行宽时看着还行，
+ *      画布窄一点就飘到画布外）。核心的 `.cm-embed-block` 与 `.cm-line > .image-embed` 都自带
+ *      `position: relative`，`.canvas-embed` 两条都不沾。
+ *   ② 丢悬停规则 → 容器永远停在核心给的 `opacity: 0`：图标在 DOM 里、点了也有效，但用户看不见。
+ *      核心的显隐只有 `.cm-embed-block:hover` 与 `.cm-content .image-embed:hover` 两条，
+ *      `.canvas-embed` 不在其中。
+ *
+ * 两条都必须带 `.markdown-source-view.mod-cm6` 前缀 —— 核心那条 `opacity: 0` 就是同前缀的
+ * `.markdown-source-view.mod-cm6 .embed-actions`，不带前缀压不住（与表格、引用块同源）。
+ */
+test('Canvas 嵌入的放大图标有定位基准与带编辑器前缀的悬停显隐', () => {
+	const baseRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) => selector.includes('.markdown-source-view.mod-cm6') && selector.endsWith('.canvas-embed'),
+			) && /position\s*:\s*relative/.test(entry.body),
+	);
+	assert.ok(
+		baseRule,
+		'styles.css 缺少 `.markdown-source-view.mod-cm6 .canvas-embed { position: relative }`：' +
+			'容器会以 .cm-scroller 为基准，按钮飘到整个滚动区的右上角',
+	);
+
+	const hoverRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.markdown-source-view.mod-cm6') &&
+					selector.includes('.canvas-embed') &&
+					selector.includes(':hover') &&
+					selector.includes('.embed-actions'),
+			) && /opacity\s*:\s*1/.test(entry.body),
+	);
+	assert.ok(
+		hoverRule,
+		'styles.css 缺少 `.markdown-source-view.mod-cm6 .canvas-embed:hover .embed-actions { opacity: 1 }`：' +
+			'核心的悬停规则不含 .canvas-embed，少了它 Canvas 图标永远不显形',
 	);
 });

@@ -1,13 +1,15 @@
 /**
  * scanner 模块的图标注入与移除：在各类区块的控制栏里插入放大图标。
  *
- * 五处锚点里，前三处是「往核心建好的容器 / chip 里插节点」（`.cm-embed-block` 内的
+ * 六处锚点里，前三处是「往核心建好的容器 / chip 里插节点」（`.cm-embed-block` 内的
  * `.embed-actions`、代码块 chip、图片的 `.embed-actions`），第四处是表格（容器由本插件
  * 自己在 `.table-wrapper` 里建），第五处（引用块）不走 DOM —— 唯一由 CM6 装饰器托管的一处，
- * 见 `scanner/quote.ts`。
+ * 见 `scanner/quote.ts`；第六处是 Canvas / 被 Excalidraw 接管的图片嵌入，同样是「容器在、
+ * 图标容器不在」，容器由本插件自建（见 `injectEmbedAction`）。
  */
 
 import { setIcon } from 'obsidian';
+import { isExcalidrawEmbed, resolveExcalidrawImage } from '../extract';
 import { t } from '../lang/helpers';
 import { TextPopupModal } from '../modal';
 import { findSupportedElement } from '../tags';
@@ -15,6 +17,8 @@ import { createTextPopupSource } from './session';
 import {
 	ACTION_CLASS,
 	ACTIONS_SELECTOR,
+	containingMarkdownView,
+	EMBED_ACTIONS_CLASS,
 	FLAIR_ACTION_CLASS,
 	TABLE_ACTIONS_CLASS,
 	type TextPopupHost,
@@ -132,6 +136,88 @@ function guardMouseDown(actionEl: HTMLElement): void {
 		evt.preventDefault();
 		evt.stopPropagation();
 	});
+}
+
+/** 第六处注入点认得的两类嵌入（见 `qualifyEmbed`）。 */
+export type EmbedKind = 'canvas' | 'excalidraw';
+
+/**
+ * 这个嵌入是不是「本插件要自建容器」的那两类；返回 null = 不是，跳过。
+ *
+ * 两条判据都来自真机实测（Obsidian 1.13.7 + Excalidraw 2.27.3）：
+ * - `canvas-embed`：核心 CanvasEmbed 建的（`app.js` 的 `a.addClass("canvas-embed")`）；
+ * - `image-embed` + `src` 指向 Excalidraw 绘图：Excalidraw 插件 `processInternalEmbed()` 改写的标记。
+ *   **不能按「没有 .embed-actions」判** —— 那会把「核心还没建容器的普通图片」也卷进来，
+ *   而核心对 N1（ImageEmbed）是**无条件** `addAction()` 的，按它判等于用偶发状态当判据。
+ */
+export function qualifyEmbed(embedEl: HTMLElement): EmbedKind | null {
+	if (embedEl.classList.contains('canvas-embed')) return 'canvas';
+	const src = embedEl.getAttribute('src') ?? '';
+	if (!src) return null;
+	return isExcalidrawEmbed(`![[${src}]]`) ? 'excalidraw' : null;
+}
+
+/**
+ * 现在该不该有图标 —— **必须与「候选集里有没有它」同源**，否则就是幽灵图标。
+ *
+ * 前三条守卫与 `injectImageAction` 同源，理由也一样（候选集里没有它，挂了就是点不开的死图标）：
+ * 1. 在别的可放大区块里：`.cm-embed-block` 有祖先 ⇒ 那一块已经有自己的图标了，多挂一个是重复图标。
+ *    实测：`> [!note]` 里的 canvas **确实**建出了 `.canvas-embed`，它的 `.closest('.cm-embed-block')`
+ *    正是那个 `.cm-callout`；而外层 Callout 在候选集里吃掉了整段（`matchCallout` 优先）。
+ * 2. 在嵌入笔记（`![[某笔记]]`）里：候选集来自外层笔记文本，点了定位不到。
+ * 3. 在引用行（`> …`）里：整行由外层引用块覆盖。
+ *
+ * 第四条只对 Excalidraw 生效：候选集里那条在「关闭同名图片回退」或「找不到同名 SVG/PNG」时会被
+ * createCandidate 丢掉（session.ts 的 `createCandidate`），图标必须同步消失。
+ */
+export function canMagnifyEmbed(embedEl: HTMLElement, host: TextPopupHost, kind: EmbedKind): boolean {
+	if (embedEl.closest('.markdown-embed')) return false;
+	if (embedEl.closest('.cm-line.HyperMD-quote')) return false;
+	if (embedEl.closest('.cm-embed-block')) return false;
+	if (kind !== 'excalidraw') return true;
+
+	const src = embedEl.getAttribute('src') ?? '';
+	if (!host.settings.excalidrawImageFallback) return false;
+	return (
+		resolveExcalidrawImage(
+			host.app,
+			`![[${src}]]`,
+			containingMarkdownView(host.app, embedEl)?.file?.path ?? '',
+			host.settings.excalidrawPreferredFormat,
+		) !== null
+	);
+}
+
+/**
+ * 往「核心没建 .embed-actions」的嵌入容器里注入放大图标（Canvas / 被接管的 Excalidraw）。
+ *
+ * 容器 class 写成 `text-popup-embed-actions embed-actions`：前者用来**认领**（摘的时候要连容器
+ * 一起摘），后者用来白拿核心的皮肤与定位 —— 与表格那一处同法（见 `injectTableAction`）。
+ * 差别只在 CSS：Excalidraw 的容器 `.image-embed` 自带 `position: relative`、也在核心的悬停规则
+ * 里，一条 CSS 都不用补；Canvas 那两条要自己补（见 styles.css）。
+ */
+export function injectEmbedAction(embedEl: HTMLElement, host: TextPopupHost, kind: EmbedKind): void {
+	if (!canMagnifyEmbed(embedEl, host, kind)) {
+		// 闸门关掉后要把已注入的按钮摘掉（关「放大图片」/ 关 Excalidraw 回退时立刻生效）
+		removeEmbedAction(embedEl);
+		return;
+	}
+	let actionsEl = embedEl.querySelector<HTMLElement>(`:scope > .${EMBED_ACTIONS_CLASS}`);
+	if (!actionsEl) actionsEl = embedEl.createDiv(`${EMBED_ACTIONS_CLASS} embed-actions`);
+	// 幂等判据：按钮已存在就跳过（重渲染后容器没了，这里会自动补回）
+	if (actionsEl.querySelector<HTMLElement>(`:scope > .${ACTION_CLASS}`)) return;
+	// 插首位：与另外几处一致，保证重复注入 / 重建后的位置稳定
+	actionsEl.insertBefore(createActionEl(actionsEl, host, 'embed-action'), actionsEl.firstChild);
+}
+
+/**
+ * 摘掉自建的容器 —— 连容器一起删，不能复用 `removeAction`。
+ *
+ * 理由与 `removeTableAction` 逐字相同：`removeAction` 的判据
+ * （`:scope > .embed-actions > .text-popup-action`）会只删掉按钮、留下一个空 `.embed-actions` 壳。
+ */
+export function removeEmbedAction(embedEl: HTMLElement): void {
+	embedEl.querySelector<HTMLElement>(`:scope > .${EMBED_ACTIONS_CLASS}`)?.remove();
 }
 
 /**

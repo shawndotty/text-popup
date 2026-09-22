@@ -3,7 +3,7 @@
  */
 
 import { MarkdownView, sanitizeHTMLToDom } from 'obsidian';
-import type { App, Editor, TFile } from 'obsidian';
+import type { Editor, TFile } from 'obsidian';
 import { scanTextBlocks } from '../blocks';
 import type { TextBlockRegion } from '../blocks';
 import {
@@ -23,6 +23,7 @@ import type { TextPopupBody, TextPopupSource } from '../modal';
 import { findSupportedElement } from '../tags';
 import {
 	BLOCK_SELECTOR,
+	containingMarkdownView,
 	hasContent,
 	isKindEnabled,
 	MEASURE_CLASS,
@@ -48,20 +49,6 @@ export function createOffscreenHost(doc: Document): HTMLElement {
 		pointerEvents: 'none',
 	});
 	return measureEl;
-}
-
-/**
- * 被点击按钮所属的编辑器视图；找不到再退回活动视图。
- *
- * 不再用 `document.body` 兜底：那会把别的窗格 / 别的笔记里的块也算进候选集，
- * 是「数量可能超过本笔记块数」的入口。
- */
-function findContainingView(app: App, actionEl: HTMLElement): MarkdownView | null {
-	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
-		const view = leaf.view;
-		if (view instanceof MarkdownView && view.containerEl.contains(actionEl)) return view;
-	}
-	return app.workspace.getActiveViewOfType(MarkdownView);
 }
 
 /**
@@ -122,7 +109,12 @@ export function createTextPopupSource(
 	host: PopupSessionHost,
 	actionEl: HTMLElement,
 ): { source: TextPopupSource; startIndex: number } {
-	const view = findContainingView(host.app, actionEl);
+	// 找不到按钮所属的窗格时退回活动视图：这是入口处可接受的近似（不再用 `document.body` 兜底 ——
+	// 那会把别的窗格 / 别的笔记里的块也算进候选集，是「数量可能超过本笔记块数」的入口）。
+	// 取 sourcePath 那类**解析基准**必须用 `containingMarkdownView` 的严格版，不能用这里的近似。
+	const view =
+		containingMarkdownView(host.app, actionEl) ??
+		host.app.workspace.getActiveViewOfType(MarkdownView);
 	const editor = view?.editor ?? null;
 	const file = view?.file ?? host.app.workspace.getActiveFile();
 

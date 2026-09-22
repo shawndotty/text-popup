@@ -8,10 +8,13 @@
 import { debounce, Platform } from 'obsidian';
 import {
 	injectAction,
+	injectEmbedAction,
 	injectFlairAction,
 	injectImageAction,
 	injectTableAction,
+	qualifyEmbed,
 	removeAction,
+	removeEmbedAction,
 	removeFlairAction,
 	removeTableAction,
 } from './inject';
@@ -22,6 +25,8 @@ import {
 	BLOCK_SELECTOR,
 	classifyBlock,
 	CODE_FLAIR_SELECTOR,
+	EMBED_ACTIONS_CLASS,
+	EMBED_SELECTOR,
 	IMAGE_SELECTOR,
 	isKindEnabled,
 	SCAN_DEBOUNCE_MS,
@@ -90,6 +95,15 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 		if (isKindEnabled(host.settings, 'image')) injectImageAction(imageEl, host);
 		else removeAction(imageEl);
 	});
+
+	// 第六处注入点：Canvas 嵌入 + 被 Excalidraw 接管的图片嵌入（都没有核心建的 .embed-actions）。
+	// 与图片同吃「放大图片」这一个开关 —— 它们的候选本来就归在 kind: 'image'（见 blocks.ts 的 wikiImageTarget）。
+	activeDocument.querySelectorAll<HTMLElement>(EMBED_SELECTOR).forEach((embedEl) => {
+		const kind = qualifyEmbed(embedEl);
+		if (!kind) return;
+		if (isKindEnabled(host.settings, 'image')) injectEmbedAction(embedEl, host, kind);
+		else removeEmbedAction(embedEl);
+	});
 }
 
 /**
@@ -113,6 +127,11 @@ export function removeAllActions(): void {
 		.forEach((actionsEl) => {
 			actionsEl.remove();
 		});
+
+	// 嵌入类（Canvas / Excalidraw）的图标容器同样是本插件自己建的，只删按钮会留空壳
+	activeDocument.querySelectorAll<HTMLElement>(`.${EMBED_ACTIONS_CLASS}`).forEach((actionsEl) => {
+		actionsEl.remove();
+	});
 }
 
 export { createTextPopupSource, openFirstTextPopup, notifyQuoteActionsChanged };

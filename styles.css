@@ -74,6 +74,28 @@
 	opacity: 1;
 }
 
+/* Canvas 嵌入的放大图标：容器同样是本插件自建的（见 scanner/inject.ts 的 injectEmbedAction），
+   位置 / 尺寸 / 默认透明度仍白拿核心的 `.markdown-source-view.mod-cm6 .embed-actions`，
+   但 Canvas 这里要自己补**两件**事（Excalidraw 那类一件都不用补 —— 它的 `.image-embed`
+   自带 `position: relative`，也在核心 `:hover` 规则里）。
+
+   ① 定位基准：实测 `.canvas-embed` 是 `position: static`，往上最近的定位祖先是 `.cm-scroller`
+      —— 容器补 `position: absolute` 后会贴到**整个滚动区**的右上角（实测按钮落在 1061,722 是因为
+      画布恰好占满行宽；画布窄一点就会飘到画布外）。核心的 `.cm-embed-block` 与
+      `.cm-line > .image-embed` 都自带 `position: relative`，Canvas 两条都不沾。
+   ② 显隐：核心的悬停规则只有 `.cm-embed-block:hover` 与 `.cm-content .image-embed:hover` 两条，
+      `.canvas-embed` 不在其中，不补就永远 `opacity: 0`。
+      这条 (0,4,0) 压得过核心的 `.markdown-source-view.mod-cm6 .embed-actions`（0,3,0），
+      与表格那条同理，不需要 `!important`。 */
+
+.markdown-source-view.mod-cm6 .canvas-embed {
+	position: relative;
+}
+
+.markdown-source-view.mod-cm6 .canvas-embed:hover .embed-actions {
+	opacity: 1;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。

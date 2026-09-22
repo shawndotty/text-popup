@@ -2,6 +2,7 @@
  * scanner 模块的共享常量、类型与分类函数。
  */
 
+import { MarkdownView } from 'obsidian';
 import type { BlockKind } from '../blocks';
 import type { Extension } from '@codemirror/state';
 import type { App, EventRef } from 'obsidian';
@@ -70,6 +71,27 @@ export const QUOTE_LINE_SELECTOR = '.cm-line.HyperMD-quote';
  */
 export const TABLE_WIDGET_CLASS = 'cm-table-widget';
 
+/**
+ * 第六处注入点：Canvas 嵌入（`.canvas-embed`）与被 Excalidraw 插件接管的图片嵌入。
+ *
+ * 两者的共同处境是「容器在、图标容器不在」—— 核心的 `addEditButton()` 与 `S3.addActions()`
+ * 都不给它们调用，所以没有现成的 `.embed-actions` 可插，容器由本插件自建
+ * （见 inject.ts 的 `injectEmbedAction`，与表格那一处同法）。
+ *
+ * 为什么必须限定在 `.cm-content` 内：
+ * - 阅读视图里 Excalidraw 那条路径会把整个 `.internal-embed` **替换**成 `div.excalidraw-svg`
+ *   （`a.parentElement.replaceChild(e, a)`）——那里连 `.image-embed` 都不剩，本插件本来就只服务 LP；
+ * - 画布视图的节点内容里也可能出现 `.canvas-embed`，限定后天然不碰。
+ *
+ * 为什么不写成属性选择器（`[src$=".excalidraw"]`）：src 可能带 `#^blockref` 子路径，
+ * 后缀匹配会漏；分类交给 inject.ts 的 `qualifyEmbed` 按 `isExcalidrawEmbed` 判。
+ */
+export const EMBED_SELECTOR =
+	'.cm-content .internal-embed.canvas-embed, .cm-content .internal-embed.image-embed';
+
+/** 自建图标容器的类名：`embed-actions` 白拿核心皮肤，`text-popup-embed-actions` 用来**认领**（摘的时候连容器一起摘）。 */
+export const EMBED_ACTIONS_CLASS = 'text-popup-embed-actions';
+
 /** 离屏测量容器的类名（弹窗打开期间存在，关闭时移除）。 */
 export const MEASURE_CLASS = 'text-popup-measure';
 export const SCAN_DEBOUNCE_MS = 150;
@@ -131,4 +153,18 @@ export function isKindEnabled(settings: TextPopupSettings, kind: BlockKind): boo
 /** 与弹窗的空内容判据一致：有文字，或有子元素（例如块里只有一张图片）。 */
 export function hasContent(el: HTMLElement): boolean {
 	return Boolean((el.textContent ?? '').trim()) || el.childElementCount > 0;
+}
+
+/**
+ * 元素所在的 Markdown 视图；没找到返回 null（**不**兜底到活动视图）。
+ *
+ * 与 session.ts 的入口语义分开：入口那边「找不到就退回活动视图」是可接受的近似，
+ * 但拿它取 sourcePath 会把**别的窗格**的笔记路径当成解析基准，相对链接会落到错的目录。
+ */
+export function containingMarkdownView(app: App, el: HTMLElement): MarkdownView | null {
+	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+		const view = leaf.view;
+		if (view instanceof MarkdownView && view.containerEl.contains(el)) return view;
+	}
+	return null;
 }
