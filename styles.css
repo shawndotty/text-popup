@@ -96,6 +96,68 @@
 	opacity: 1;
 }
 
+/* 弹窗里的画布嵌入（V119）：让画布铺满内容区宽度、按 viewBox 比例变高。
+   改动前实测画布只有笔记里的 43%（同一张画布：笔记 700×393、弹窗 svg 盒仅 308×175，
+   用户实际看到的绘制范围 273×140）。病因是两条互不相干的上限叠加：
+
+   ① 宽度没有基准 → 退回 UA 默认的 300px。
+      画布那个 svg.canvas-minimap 只有核心写的 width: 100%，元素上没有 width/height 属性；
+      而 .text-popup-text 是 .text-popup-content（flex）的 flex 项、width: auto，主尺寸按内容算
+      —— 百分比落进「按内容定尺寸」的循环引用只能解析成 auto，替换元素于是退回 UA 默认宽 300px
+      （实测 .text-popup-text computed 宽 307.979px = 300 + 2×4 的 svg padding，指纹清楚）。
+      这不是新病：同文件里 iframe（见下面 :has(iframe) 那条）与 mermaid（:has(.mermaid) 那条）
+      是同一个坑、同一个处方 —— 给容器的宽度钉一个确定值。
+      width 与 min-width 两条一起写是沿用那两份先例：本例实测只写 width、只写 min-width、
+      两条都写完全一样（都是 1213 宽），min-width 防的是将来内容比容器宽时的收缩。
+      只命中含 .canvas-embed 的块，其余块维持原来的按内容收缩（短文字仍居中）。
+
+   ② 核心给 .inline-embed > .canvas-minimap 钉了 max-height: var(--embed-canvas-max-height)
+      （app.css:2221 = 400px、app.css:18261），那是给**笔记内**的嵌入定的（别让画布把笔记撑太长），
+      弹窗的语境正相反，它本来就是「放大看」。
+      只加 ① 时它会把 svg 钉成 1213×400：**宽度是确定值，触发 max-height 时浏览器不回收宽度**，
+      只按 preserveAspectRatio 把图等比缩进框中央 —— 实测画布仍只有 704×393（只比笔记大 1.8%），
+      反而变成「一个很宽的框里一张小图」。
+      这里取 max-height: 100cqh（「一屏装下」）而不是 none（「最大倍率」）：
+      两种口径对**宽扁画布**完全等价（实测盒 1212.9×678.6、图 1204.9×670.6 = 笔记的 1.74×），
+      差别只在**竖版 / 超高画布**上 —— none 能画到 1205×2682（1.9×）但要看全得滚 3.5 屏，
+      100cqh 把它画到 304×677 正好一屏装下、零滚动，且与本插件既有的两份口径一致
+      （mermaid 的「一屏刚好装下」、V118 图片的「按可用盒子装下」）。取舍与实测见 Plan-20260922-201827 §3.3 / §3.5。
+      参照物是 .text-popup-content 上的 container-type: size（见上面那条注释），丢了它会退回视口。
+      权重：本条 (0,5,0) 压过核心的 .inline-embed > .canvas-minimap (0,2,0)，不需要 !important。
+
+      height: auto 不是必需（核心那条 height: 100% 在弹窗里父级高度是 auto，百分比本就解析成 auto），
+      写出来是为了不依赖「父级高度必须是 auto」这个隐含前提，把高度明确交回 viewBox 比例。
+
+   两条都带 .mod-text-popup 前缀 → 笔记侧的画布嵌入仍归核心那条 400px 管，一行都不动。 */
+
+.mod-text-popup .text-popup-text.is-rich:has(.canvas-embed) {
+	width: 100%;
+	min-width: 100%;
+}
+
+.mod-text-popup .text-popup-text.is-rich .canvas-embed > .canvas-minimap {
+	height: auto;
+	max-height: 100cqh;
+}
+
+/* 画布嵌入下的「字体降部」：svg 是行内替换元素，行盒会按字体降部多留一截
+   （与图片那条同法，见上面 .is-rich > p:only-child 的 line-height: 0）。
+   不清的话「画布一屏装下」之后仍多出 26px 的可滚动空白
+   （实测 clientHeight/scrollHeight：813/813 → 撤掉 ③④ 是 813/839，其中 ③ 自己值 8px、④ 值 18px） */
+.mod-text-popup .text-popup-text.is-rich .canvas-embed {
+	line-height: 0;
+}
+
+/* 文件名 chip（`Canvas-xxx.canvas`）：在弹窗里不显示。
+   它是 32px 高的 flex 行、不吃上面的 line-height: 0，会一直占着高度预算，
+   把「一屏装下」的画布又挤出 18px 的可滚动空白（实测撤掉本条 → clientHeight/scrollHeight 813/831）。
+   代价：弹窗里看不到嵌入的文件名（标题栏仍有笔记名与「当前 / 总数」）；
+   要恢复就删掉这一条，画布会退回多 18px 纵向滚动。 */
+
+.mod-text-popup .text-popup-text.is-rich .canvas-embed > .embed-title {
+	display: none;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。

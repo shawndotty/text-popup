@@ -1,8 +1,8 @@
 /**
- * 弹窗样式回归用例 —— 目前钉住五条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
+ * 弹窗样式回归用例 —— 目前钉住六条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
  * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）、
- * 表格放大图标的悬停显隐（V117，2026-09-21）、弹窗图片的尺寸口径（V118，2026-09-21）
- * 与 Canvas 嵌入那两条（V119，2026-09-22）。
+ * 表格放大图标的悬停显隐（V117，2026-09-21）、弹窗图片的尺寸口径（V118，2026-09-21）、
+ * Canvas 嵌入的放大图标（V119，2026-09-22）与弹窗里的画布尺寸（V119，2026-09-22）。
  *
  * 背景：核心给单元格直接写了字号
  * （`.markdown-rendered td { font-size: var(--table-text-size) }`、
@@ -242,5 +242,98 @@ test('Canvas 嵌入的放大图标有定位基准与带编辑器前缀的悬停�
 		hoverRule,
 		'styles.css 缺少 `.markdown-source-view.mod-cm6 .canvas-embed:hover .embed-actions { opacity: 1 }`：' +
 			'核心的悬停规则不含 .canvas-embed，少了它 Canvas 图标永远不显形',
+	);
+});
+
+/**
+ * 弹窗里的画布嵌入（V119）必须有两条尺寸规则，外加两条把纵向滚动清到 0 的补丁。
+ *
+ * 两条上限叠加曾把画布压到笔记的 43%（真机实测：笔记里 700×393，弹窗里 svg 盒只有 308×175、
+ * 用户实际看到的绘制范围 273×140），各自的病症：
+ *   ① 丢 `width/min-width: 100%` → 回到「容器按内容收缩」：画布的 svg 只有核心写的 `width: 100%`、
+ *      元素上没有 `width`/`height` 属性，百分比落进循环引用 → 浏览器退回 UA 默认的 300px
+ *      （实测 `.text-popup-text` computed 宽 307.979px = 300 + 2×4 的 svg padding，指纹清楚）。
+ *   ② 丢 `max-height: none|100cqh` → 被核心的 `--embed-canvas-max-height: 400px` 吃回去：
+ *      `.canvas-minimap` 的宽度是确定值，触发 `max-height` 时浏览器**不回收宽度**、只把图按
+ *      `preserveAspectRatio` 缩进框中央 —— 实测盒 1213×400、画布仍只有 704×393（只比笔记大 1.8%）。
+ *      注：这里断言「`none` 或 `100cqh` 二选一」。`100cqh` = 一屏装下（与本插件 mermaid / 图片同口径，
+ *      竖版画布实测 304×677、零滚动），`none` = 最大倍率（竖版实测 1205×2682、要滚 3.5 屏）；
+ *      两者对宽扁画布完全等价，选哪条都不该判失败。
+ *   ③④ 丢 `line-height: 0` / `.embed-title { display: none }` → 纯观感回归（画布下面多出 38px 的
+ *      可滚动空白，文件名 chip 又占掉 32px 的高度预算），不报错，只能靠这条断言看住。
+ *
+ * 作用域是硬要求：两条尺寸规则都必须带 `.mod-text-popup` —— 丢了前缀会连带改掉**笔记侧**的画布嵌入
+ * （核心那条 400px 上限是给笔记定的既有设计）。尺寸类的最终数字靠真机核对（本仓库没有能跑真实样式的
+ * DOM 环境，见文件头），这里只钉住「CSS 是否还在」。
+ */
+test('弹窗里的画布嵌入有确定宽度、解除 400px 上限，并把纵向滚动清到 0', () => {
+	const widthRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.mod-text-popup') &&
+					selector.includes('.is-rich') &&
+					selector.includes(':has(.canvas-embed)'),
+			) &&
+			/(^|[\s;{])width\s*:\s*100%/.test(entry.body) &&
+			/(^|[\s;{])min-width\s*:\s*100%/.test(entry.body),
+	);
+	assert.ok(
+		widthRule,
+		'styles.css 缺少 `.mod-text-popup .text-popup-text.is-rich:has(.canvas-embed) { width/min-width: 100% }`：' +
+			'容器按内容收缩时画布的百分比宽度会进循环引用、退回 UA 默认的 300px（画布只有笔记的 43%）',
+	);
+	assert.ok(
+		widthRule.selectors.every((selector) => selector.includes('.mod-text-popup')),
+		'画布宽度规则必须带 .mod-text-popup 作用域，否则会波及笔记侧的画布嵌入',
+	);
+
+	const heightRule = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.mod-text-popup') &&
+					selector.includes('.canvas-embed') &&
+					selector.includes('.canvas-minimap'),
+			) && /max-height\s*:\s*(none|100cqh)/.test(entry.body),
+	);
+	assert.ok(
+		heightRule,
+		'styles.css 缺少弹窗内 `.canvas-embed > .canvas-minimap` 的 `max-height: none` / `100cqh`：' +
+			'核心的 --embed-canvas-max-height: 400px 不回收宽度，会把画布钉成「很宽的框里一张小图」',
+	);
+	assert.ok(
+		heightRule.selectors.every((selector) => selector.includes('.mod-text-popup')),
+		'解除 400px 上限的规则必须带 .mod-text-popup 作用域，否则会连带改掉笔记侧的画布嵌入',
+	);
+
+	const inlineGapPatch = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.mod-text-popup') &&
+					selector.includes('.is-rich') &&
+					selector.endsWith('.canvas-embed'),
+			) && /line-height\s*:\s*0/.test(entry.body),
+	);
+	assert.ok(
+		inlineGapPatch,
+		'styles.css 缺少 `.canvas-embed { line-height: 0 }`：svg 是行内替换元素，' +
+			'行盒会按字体降部多留 38px 的可滚动空白',
+	);
+
+	const titlePatch = RULES.find(
+		(entry) =>
+			entry.selectors.some(
+				(selector) =>
+					selector.includes('.mod-text-popup') &&
+					selector.includes('.canvas-embed') &&
+					selector.includes('.embed-title'),
+			) && /display\s*:\s*none/.test(entry.body),
+	);
+	assert.ok(
+		titlePatch,
+		'styles.css 缺少弹窗内 `.canvas-embed > .embed-title { display: none }`：' +
+			'文件名 chip 是 32px 高的 flex 行、不吃 line-height: 0，会挤出 32px 纵向滚动',
 	);
 });
