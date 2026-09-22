@@ -22,6 +22,8 @@ const {
 	extractMathBody,
 	extractQuoteBody,
 	extractTableBody,
+	isExcalidrawEmbed,
+	resolveExcalidrawImage,
 } = await jiti.import('../src/extract.ts');
 
 // —— extractFencedBody ——
@@ -126,6 +128,105 @@ test('路径形态取 alt', () => {
 
 test('没有 alt 时原样返回（返回空串会让候选被当成空块丢掉）', () => {
 	assert.equal(extractImageBody('![](p.png)'), '![](p.png)');
+});
+
+// —— isExcalidrawEmbed ——
+//
+// 只在 `createCandidate` 里用来分流：把 Excalidraw wiki embed 路由到「同名 PNG/SVG 图片回退」。
+// 严格只认 `.excalidraw` / `.excalidraw.md`，普通图片与 Canvas 都不算 — 后两者走通用 image 路径。
+
+test('isExcalidrawEmbed 只认 .excalidraw 与 .excalidraw.md', () => {
+	assert.equal(isExcalidrawEmbed('![[file.excalidraw]]'), true, '.excalidraw');
+	assert.equal(isExcalidrawEmbed('![[file.excalidraw.md]]'), true, '.excalidraw.md');
+	assert.equal(
+		isExcalidrawEmbed('![[folder/file.excalidraw|100]]'),
+		true,
+		'带尺寸后缀仍识别',
+	);
+	assert.equal(isExcalidrawEmbed('![[file.excalidraw#section]]'), true, '带锚点仍识别');
+	assert.equal(isExcalidrawEmbed('![[file.png]]'), false, '普通图片不算');
+	assert.equal(isExcalidrawEmbed('![[file.canvas]]'), false, 'Canvas 不算');
+	assert.equal(isExcalidrawEmbed('![[file.base]]'), false, 'Bases 不算');
+	assert.equal(isExcalidrawEmbed('![[note]]'), false, '普通笔记不算');
+});
+
+// —— resolveExcalidrawImage ——
+//
+// 把 `![[xxx.excalidraw]]` 改写为同名 `xxx.excalidraw.svg` / `.png` 的嵌入路径。
+// 优先格式先找，找不到再找回退格式，两个都不存在则返回 null（候选丢弃，由调用方告警）。
+// 测试用 fake metadataCache，duck typing 返回 `{ path }` —— 与生产里 `getFirstLinkpath: TFile` 同形。
+
+/** 造一个 fake app：按 linkpath → 路径 的预设表返回 TFile-like。 */
+function fakeApp(resolver) {
+	return {
+		metadataCache: {
+			getFirstLinkpathDest: (linkpath) => {
+				const path = resolver(linkpath);
+				return path ? { path } : null;
+			},
+		},
+	};
+}
+
+test('resolveExcalidrawImage 默认走 SVG 优先', () => {
+	const app = fakeApp((link) => {
+		if (link === 'file.excalidraw.svg') return 'folder/file.excalidraw.svg';
+		return null;
+	});
+	assert.equal(
+		resolveExcalidrawImage(app, '![[file.excalidraw]]', 'folder/note.md', 'svg'),
+		'folder/file.excalidraw.svg',
+	);
+});
+
+test('resolveExcalidrawImage 找不到 SVG 时回退 PNG', () => {
+	const app = fakeApp((link) => {
+		if (link === 'file2.excalidraw.png') return 'folder/file2.excalidraw.png';
+		return null;
+	});
+	assert.equal(
+		resolveExcalidrawImage(app, '![[file2.excalidraw]]', '', 'svg'),
+		'folder/file2.excalidraw.png',
+	);
+});
+
+test('resolveExcalidrawImage 优先格式设为 png 时先找 PNG 再回退 SVG', () => {
+	const app = fakeApp((link) => {
+		if (link === 'file.excalidraw.png') return 'folder/file.excalidraw.png';
+		if (link === 'file.excalidraw.svg') return 'folder/file.excalidraw.svg';
+		return null;
+	});
+	assert.equal(
+		resolveExcalidrawImage(app, '![[file.excalidraw]]', '', 'png'),
+		'folder/file.excalidraw.png',
+		'优先 PNG',
+	);
+});
+
+test('resolveExcalidrawImage 两种都不存在时返回 null', () => {
+	const app = fakeApp(() => null);
+	assert.equal(
+		resolveExcalidrawImage(app, '![[missing.excalidraw]]', '', 'svg'),
+		null,
+	);
+});
+
+test('resolveExcalidrawImage 兼容 .excalidraw.md 后缀', () => {
+	const app = fakeApp((link) => {
+		if (link === 'file.excalidraw.svg') return 'file.excalidraw.svg';
+		return null;
+	});
+	assert.equal(
+		resolveExcalidrawImage(app, '![[file.excalidraw.md]]', '', 'svg'),
+		'file.excalidraw.svg',
+	);
+});
+
+test('resolveExcalidrawImage 非 Excalidraw embed 找不到同名图片时也返回 null', () => {
+	// 调用方应先用 isExcalidrawEmbed 守卫；这里只验证「找不到候选文件」时不会误返回路径。
+	const app = fakeApp(() => null);
+	assert.equal(resolveExcalidrawImage(app, '![[file.png]]', '', 'svg'), null);
+	assert.equal(resolveExcalidrawImage(app, '![[file.canvas]]', '', 'svg'), null);
 });
 
 // —— extractTableBody ——

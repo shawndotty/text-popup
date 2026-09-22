@@ -33,6 +33,12 @@ export default {
 	'Render HTML and Markdown': 'Render HTML and Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
+	'Excalidraw image fallback': 'Excalidraw image fallback',
+	'Show Excalidraw embeds as same-name PNG/SVG images inside the popup. Requires Auto-export SVG and filename sync enabled in the Excalidraw plugin.':
+		'Show Excalidraw embeds as same-name PNG/SVG images inside the popup. Requires Auto-export SVG and filename sync enabled in the Excalidraw plugin.',
+	'Preferred Excalidraw image format': 'Preferred Excalidraw image format',
+	'SVG is vector and scales losslessly with the popup zoom; PNG is raster. The fallback format is tried if the preferred one is missing.':
+		'SVG is vector and scales losslessly with the popup zoom; PNG is raster. The fallback format is tried if the preferred one is missing.',
 	'Follow the theme background': 'Follow the theme background',
 	'Popup background color': 'Popup background color',
 	'Color of the popup window.': 'Color of the popup window.',

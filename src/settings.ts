@@ -31,6 +31,10 @@ export interface TextPopupSettings {
 	singleLineTag: string;
 	/** `Popup Selected Text` 包裹多行选区（含换行）用的标签；必须是 supportedTags 里的块级标签。 */
 	multiLineTag: string;
+	/** 是否对 Excalidraw 嵌入走「同名 PNG/SVG 图片回退」路径（要求 Excalidraw 插件开启 Auto-export）。 */
+	excalidrawImageFallback: boolean;
+	/** Excalidraw 同名图片的优先格式：SVG 矢量（推荐），PNG 回退。 */
+	excalidrawPreferredFormat: 'svg' | 'png';
 }
 
 /** 老 `data.json` 只有 `popupTag`（1.1.0 之前唯一的包裹标签），升级后它代表多行标签。 */
@@ -48,6 +52,8 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	blockKinds: { code: true, callout: true, math: true, image: true, quote: true, table: true },
 	singleLineTag: 'p',
 	multiLineTag: 'div',
+	excalidrawImageFallback: false,
+	excalidrawPreferredFormat: 'svg',
 };
 
 /** 「跟随主题」时色块控件的备用色（`<input type=color>` 表示不了「没有颜色」）。 */
@@ -141,6 +147,12 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 		blockKinds: readBlockKinds(data.blockKinds),
 		singleLineTag: resolveSingleLineTag(data.singleLineTag, multiLineTag, supportedTags),
 		multiLineTag,
+		excalidrawImageFallback:
+			typeof data.excalidrawImageFallback === 'boolean'
+				? data.excalidrawImageFallback
+				: DEFAULT_SETTINGS.excalidrawImageFallback,
+		excalidrawPreferredFormat:
+			data.excalidrawPreferredFormat === 'png' ? 'png' : 'svg',
 	};
 }
 
@@ -168,7 +180,9 @@ export type SettingKey =
 	| 'popupFontSize'
 	| 'supportedTags'
 	| 'singleLineTag'
-	| 'multiLineTag';
+	| 'multiLineTag'
+	| 'excalidrawImageFallback'
+	| 'excalidrawPreferredFormat';
 
 /** 改完某个键之后要跑的副作用 —— 单独一张表，防止「顺手多加一次全文档刷新」。 */
 export type SettingEffect = 'refreshActions' | 'quoteActions' | 'rebuildDefinitions';
@@ -281,6 +295,10 @@ export function writeSettingValue(
 			return assignBlockKind(settings, 'table', value);
 		case 'supportedTags':
 			return assignSupportedTags(settings, value);
+		case 'excalidrawImageFallback':
+			return assign(settings, 'excalidrawImageFallback', value === true);
+		case 'excalidrawPreferredFormat':
+			return assign(settings, 'excalidrawPreferredFormat', value === 'png' ? 'png' : 'svg');
 	}
 }
 
@@ -425,6 +443,25 @@ export class TextPopupSettingTab extends PluginSettingTab {
 							"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.",
 						),
 						control: { type: 'toggle', key: 'renderRichText' },
+					},
+					{
+						name: t('Excalidraw image fallback'),
+						desc: t(
+							'Show Excalidraw embeds as same-name PNG/SVG images inside the popup. Requires Auto-export SVG and filename sync enabled in the Excalidraw plugin.',
+						),
+						control: { type: 'toggle', key: 'excalidrawImageFallback' },
+					},
+					{
+						name: t('Preferred Excalidraw image format'),
+						desc: t(
+							'SVG is vector and scales losslessly with the popup zoom; PNG is raster. The fallback format is tried if the preferred one is missing.',
+						),
+						visible: (): boolean => settings.excalidrawImageFallback,
+						control: {
+							type: 'dropdown',
+							key: 'excalidrawPreferredFormat',
+							options: { svg: 'SVG', png: 'PNG' },
+						},
 					},
 					{
 						name: t('Follow the theme background'),

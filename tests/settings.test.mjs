@@ -127,6 +127,56 @@ test('副作用表：表格开关只刷新图标（与 code / callout / math / i
 	assert.ok(!settingSideEffects('blockKinds.table').includes('quoteActions'), '表格不重建装饰集');
 });
 
+// —— Excalidraw 图片回退 ——
+
+test('excalidrawImageFallback 默认关，老 data.json 升级后自动补 false', () => {
+	assert.equal(DEFAULT_SETTINGS.excalidrawImageFallback, false, '默认关');
+	assert.equal(normalizeSettings({}).excalidrawImageFallback, false, '空对象补 false');
+	assert.equal(normalizeSettings({ excalidrawImageFallback: 1 }).excalidrawImageFallback, false, '非布尔的补 false');
+	assert.equal(
+		normalizeSettings({ excalidrawImageFallback: true }).excalidrawImageFallback,
+		true,
+		'显式开启被保留',
+	);
+});
+
+test('excalidrawPreferredFormat 默认 svg，非 png 字段补 svg', () => {
+	assert.equal(DEFAULT_SETTINGS.excalidrawPreferredFormat, 'svg', '默认 svg');
+	assert.equal(normalizeSettings({}).excalidrawPreferredFormat, 'svg', '空对象补 svg');
+	assert.equal(
+		normalizeSettings({ excalidrawPreferredFormat: 'png' }).excalidrawPreferredFormat,
+		'png',
+		'png 被保留',
+	);
+	assert.equal(
+		normalizeSettings({ excalidrawPreferredFormat: 'gif' }).excalidrawPreferredFormat,
+		'svg',
+		'非 svg/png 一律回落 svg',
+	);
+});
+
+test('读 / 写：excalidrawImageFallback / excalidrawPreferredFormat 走 assign 路径', () => {
+	const settings = normalizeSettings(undefined);
+	assert.equal(readSettingValue(settings, 'excalidrawImageFallback'), false, '默认读回 false');
+	assert.equal(readSettingValue(settings, 'excalidrawPreferredFormat'), 'svg', '默认读回 svg');
+	assert.equal(writeSettingValue(settings, 'excalidrawImageFallback', true), true, '关 → 算改动');
+	assert.equal(settings.excalidrawImageFallback, true);
+	assert.equal(writeSettingValue(settings, 'excalidrawImageFallback', true), false, '同值不算改动');
+	assert.equal(writeSettingValue(settings, 'excalidrawPreferredFormat', 'png'), true, 'svg → png 算改动');
+	assert.equal(settings.excalidrawPreferredFormat, 'png');
+	assert.equal(
+		writeSettingValue(settings, 'excalidrawPreferredFormat', 'weird'),
+		true,
+		'非法字符串也算改动（归一化后是 svg）',
+	);
+	assert.equal(settings.excalidrawPreferredFormat, 'svg', '非法字符串归一化到 svg');
+});
+
+test('副作用表：两个 Excalidraw 设置项都不触发刷新（纯保存即可）', () => {
+	assert.deepEqual([...settingSideEffects('excalidrawImageFallback')], [], 'fallback 开关');
+	assert.deepEqual([...settingSideEffects('excalidrawPreferredFormat')], [], '格式选择');
+});
+
 // —— 数值回落 ——
 
 test('字号越界被 clamp 到上下限', () => {

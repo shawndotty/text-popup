@@ -313,10 +313,32 @@ export const MD_IMAGE = /!\[[^\]\n]*\]\(([^)\n]+)\)/;
 /** 行内 HTML 标签：命中时这张图在行内 HTML widget 里（没有 `.embed-actions`），不做候选。 */
 const HTML_TAG = /<\/?[a-zA-Z][^>\n]*>/;
 
-/** wiki 形态：target 的扩展名必须在图片表里（`![[某笔记]]` / `![[x.pdf]]` 都不是图片嵌入）。 */
+/**
+ * 非图片、但 Live Preview 一样建成 `.image-embed` 的 wiki embed 扩展名：
+ *   - `canvas`：Obsidian 1.1+ 原生白板，嵌入是只读 SVG 预览
+ *   - `excalidraw` / `excalidraw.md`：Excalidraw 插件，弹窗走「同名 PNG/SVG 图片回退」
+ *     （见 extract.ts 的 resolveExcalidrawImage）
+ *
+ * 不放进 `IMAGE_EXTENSIONS`：那是核心建图 widget 的扩展名表（注释「勿手改」），
+ * 与这里「扫描器允许的扩展名」语义不同，混在一起会让 hasImageExtension 的语义变模糊。
+ *
+ * `.excalidraw.md` 是双层扩展名，`hasImageExtension` 的 `lastIndexOf('.')` 只能取到 `md`，
+ * 所以这里用 `endsWith` 单独判，其余单层扩展名仍走 `lastIndexOf('.')`。
+ */
+const EMBEDDABLE_NON_IMAGE_EXTENSIONS = ['canvas'];
+const EMBEDDABLE_NON_IMAGE_SUFFIXES = ['.excalidraw', '.excalidraw.md'];
+
+function hasEmbeddableNonImageExtension(target: string): boolean {
+	const lower = target.toLowerCase();
+	if (EMBEDDABLE_NON_IMAGE_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return true;
+	const dot = target.lastIndexOf('.');
+	return dot > 0 && EMBEDDABLE_NON_IMAGE_EXTENSIONS.includes(target.slice(dot + 1).toLowerCase());
+}
+
+/** wiki 形态：target 必须是图片或可放大嵌入（`![[某笔记]]` / `![[x.pdf]]` 都不是图片嵌入）。 */
 function wikiImageTarget(inner: string): string | null {
 	const target = (inner.split('|')[0] ?? '').split('#')[0]?.trim() ?? '';
-	return hasImageExtension(target) ? target : null;
+	return hasImageExtension(target) || hasEmbeddableNonImageExtension(target) ? target : null;
 }
 
 /**

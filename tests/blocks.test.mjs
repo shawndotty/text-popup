@@ -226,6 +226,41 @@ test('五种图片写法各产出一条单行区间，raw 是命中的语法片�
 	}
 });
 
+// —— Canvas / Excalidraw wiki embed ——
+//
+// 这些不是图片扩展名（IMAGE_EXTENSIONS 不含 canvas / excalidraw / base），
+// 但 Live Preview 一样建成 `.image-embed`，所以扫描器要把它们当 image 块识别。
+// Excalidraw 在弹窗里走「同名 PNG/SVG 图片回退」（见 extract.test.mjs 的 resolveExcalidrawImage），
+// Canvas 走标准 MarkdownRenderer 嵌入（Obsidian 原生只读 SVG 预览）。
+// Bases 不在白名单 — 本期显式不支持。
+
+test('Canvas / Excalidraw wiki embed 被识别为 image 块', () => {
+	const cases = [
+		'![[board.canvas]]',
+		'![[drawing.excalidraw]]',
+		'![[drawing.excalidraw.md]]',
+		'![[subfolder/board.canvas|300]]',
+		'![[drawing.excalidraw|100]]',
+	];
+	for (const line of cases) {
+		const regions = scanTextBlocks(line);
+		assert.deepEqual(outline(line), ['image:0-0'], `区间：${line}`);
+		assert.equal(regions[0]?.raw, line, `raw 保留原 embed 语法：${line}`);
+	}
+});
+
+test('Bases wiki embed 不被识别（本期显式不支持 Bases）', () => {
+	assert.deepEqual(outline('![[tasks.base]]'), []);
+	assert.deepEqual(outline('![[tasks.base|filter]]'), []);
+});
+
+test('Canvas / Excalidraw 写成 markdown 图片语法不识别（只走 wiki embed）', () => {
+	// `![](board.canvas)` 走的是 pathImageTarget，它只过 hasImageExtension（图片扩展名白名单），
+	// Canvas / Excalidraw 不在里面 — 与「Canvas 不走 ![](...) 写法」的实测一致。
+	assert.deepEqual(outline('![x](board.canvas)'), []);
+	assert.deepEqual(outline('![x](drawing.excalidraw)'), []);
+});
+
 test('行首是 `>` 的图片由引用块覆盖，不再单独成条（V114 行为变更）', () => {
 	assert.deepEqual(outline('> ![alt](p.png)'), ['quote:0-0'], '一个视觉块只出一条候选');
 	assert.equal(

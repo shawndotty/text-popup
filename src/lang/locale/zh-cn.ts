@@ -32,6 +32,12 @@ const zhCN: Partial<typeof en> = {
 	'Render HTML and Markdown': '渲染 HTML 与 Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":
 		'在弹窗内按语法渲染块里的 HTML 与 Markdown。关闭后按纯文本原样显示。',
+	'Excalidraw image fallback': 'Excalidraw 图片回退',
+	'Show Excalidraw embeds as same-name PNG/SVG images inside the popup. Requires Auto-export SVG and filename sync enabled in the Excalidraw plugin.':
+		'在弹窗内把 Excalidraw 嵌入显示为同名的 PNG/SVG 图片。需先在 Excalidraw 插件设置里开启 Auto-export SVG 并保持文件名同步。',
+	'Preferred Excalidraw image format': 'Excalidraw 优先图片格式',
+	'SVG is vector and scales losslessly with the popup zoom; PNG is raster. The fallback format is tried if the preferred one is missing.':
+		'SVG 是矢量，弹窗缩放时无损放大；PNG 是栅格图。优先格式找不到时会尝试另一种。',
 	'Follow the theme background': '跟随主题背景色',
 	'Popup background color': '弹窗背景色',
 	'Color of the popup window.': '弹窗窗口的背景颜色。',

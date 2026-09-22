@@ -15,6 +15,8 @@ import {
 	extractRichSource,
 	extractTableBody,
 	extractText,
+	isExcalidrawEmbed,
+	resolveExcalidrawImage,
 } from '../extract';
 import { TextPopupModal } from '../modal';
 import type { TextPopupBody, TextPopupSource } from '../modal';
@@ -173,9 +175,10 @@ function buildPopupSession(
 	const measure = (): HTMLElement => (measureEl ??= createOffscreenHost(getDoc()));
 
 	const candidates: PopupCandidate[] = [];
+	const sourcePath = file?.path ?? '';
 	for (const region of editor ? scanTextBlocks(editor.getValue()) : []) {
 		if (!isKindEnabled(host.settings, region.kind)) continue;
-		const candidate = createCandidate(region, host, measure);
+		const candidate = createCandidate(region, host, measure, sourcePath);
 		if (candidate) candidates.push(candidate);
 	}
 
@@ -210,6 +213,7 @@ function createCandidate(
 	region: TextBlockRegion,
 	host: PopupSessionHost,
 	measure: () => HTMLElement,
+	sourcePath: string,
 ): PopupCandidate | null {
 	if (region.kind === 'html') {
 		// 与核心 widget 同样的渲染方式（公开 API sanitizeHTMLToDom），结构与编辑器里同源
@@ -223,6 +227,33 @@ function createCandidate(
 			read: () => {
 				const plain = extractText(target);
 				const rich = host.settings.renderRichText ? extractRichSource(target) : '';
+				return plain || rich ? { plain, rich } : null;
+			},
+		};
+	}
+
+	// Excalidraw wiki embed：弹窗不直接渲染 Excalidraw 视图，而是改写为同名 PNG/SVG 图片
+	// 嵌入交给 MarkdownRenderer。要求用户在 Excalidraw 插件里开启 Auto-export + filename sync。
+	// 设置里默认关：未启用就直接返回 null，候选被丢弃（不弹空白窗）。
+	if (region.kind === 'image' && isExcalidrawEmbed(region.raw)) {
+		if (!host.settings.excalidrawImageFallback) return null;
+		const resolved = resolveExcalidrawImage(
+			host.app,
+			region.raw,
+			sourcePath,
+			host.settings.excalidrawPreferredFormat,
+		);
+		if (!resolved) {
+			console.warn(
+				`[text-popup] Excalidraw 同名图片未找到，请确认 Auto-export 已开启并保持文件名同步：${region.raw}`,
+			);
+			return null;
+		}
+		const plain = extractImageBody(region.raw);
+		return {
+			region,
+			read: () => {
+				const rich = host.settings.renderRichText ? `![[${resolved}]]` : '';
 				return plain || rich ? { plain, rich } : null;
 			},
 		};

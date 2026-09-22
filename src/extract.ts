@@ -1,3 +1,4 @@
+import type { App } from 'obsidian';
 import { WIKI_EMBED } from './blocks';
 import { matchTable } from './convert/forward-table';
 
@@ -106,6 +107,65 @@ export function extractImageBody(raw: string): string {
 	}
 	const alt = /^!\[([^\]\n]*)\]/.exec(raw)?.[1]?.split('|')[0]?.trim();
 	return alt || raw;
+}
+
+/**
+ * 判断一段 wiki embed 是否是 Excalidraw 嵌入（用于 createCandidate 分流到「同名图片回退」路径）。
+ *
+ * 与 `wikiImageTarget` 不同，这里只关心 `.excalidraw` / `.excalidraw.md`，Canvas 与普通图片都不算。
+ */
+export function isExcalidrawEmbed(rawEmbed: string): boolean {
+	const wiki = WIKI_EMBED.exec(rawEmbed);
+	if (!wiki) return false;
+	const target = (wiki[1] ?? '').split('|')[0]?.split('#')[0]?.trim() ?? '';
+	return /\.excalidraw(\.md)?$/i.test(target);
+}
+
+/**
+ * 解析 Excalidraw wiki embed 的同名 PNG/SVG 文件路径。
+ *
+ * Excalidraw 插件 Auto-export + filename sync 开启后，绘图 `xxx.excalidraw` 或
+ * `xxx.excalidraw.md` 会同目录生成 `xxx.excalidraw.svg` 与/或 `xxx.excalidraw.png`。
+ * 按设置里的优先格式先找一种、找不到再找另一种，都不存在则返回 null（候选丢弃，由调用方告警）。
+ *
+ * 返回的是 vault 内的绝对路径（TFile.path），用于构造 `![[<path>]]` 喂给 MarkdownRenderer —
+ * 用 path 而不是 basename：同名文件在不同目录时 basename 会歧义，path 不存在歧义。
+ */
+export function resolveExcalidrawImage(
+	app: App,
+	rawEmbed: string,
+	sourcePath: string,
+	preferredFormat: 'svg' | 'png',
+): string | null {
+	const wiki = WIKI_EMBED.exec(rawEmbed);
+	if (!wiki) return null;
+	const inner = wiki[1] ?? '';
+	const target = inner.split('|')[0]?.split('#')[0]?.trim() ?? '';
+	// 把 .excalidraw 或 .excalidraw.md 后缀整个去掉，得到绘图 base 名
+	const base = target.replace(/\.excalidraw(\.md)?$/i, '');
+	if (!base) return null;
+
+	const fallbackFormat = preferredFormat === 'svg' ? 'png' : 'svg';
+	const candidates = [
+		`${base}.excalidraw.${preferredFormat}`,
+		`${base}.excalidraw.${fallbackFormat}`,
+	];
+
+	for (const candidate of candidates) {
+		// `getFirstLinkpathDest` 的签名是 `(linkpath, sourcePath) => TFile | null`，这里只用 `.path`
+		// 字段做 duck typing — 既兼容生产环境的真 TFile，也兼容测试里的纯对象 mock。
+		// `import type` 在运行时不可用，不能写 `instanceof TFile`。
+		const file: unknown = app.metadataCache.getFirstLinkpathDest(candidate, sourcePath);
+		if (
+			typeof file === 'object' &&
+			file !== null &&
+			'path' in file &&
+			typeof file.path === 'string'
+		) {
+			return file.path;
+		}
+	}
+	return null;
 }
 
 /**
