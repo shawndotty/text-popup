@@ -199,6 +199,10 @@
 	width: 100%;
 }
 
+.mod-text-popup .modal-header-button,
+.mod-text-popup .modal-header {
+	z-index: 1;
+}
 .mod-text-popup .modal-title {
 	color: var(--text-normal);
 }
