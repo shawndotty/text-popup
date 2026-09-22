@@ -34,6 +34,12 @@
  * 不再生效，`zoomTweenFrame` 那条直线于是断掉，内容先被钉住、再随 scale 反向甩回来（真机实测
  * 横向甩回 101px，见 Report-20260920-202610 §3）。这里钉住补偿的两个分支与两个端点，
  * 并用真机那组几何跑一遍「夹取 vs 补偿」的对照（不补偿必须出现反向，补偿后必须单调）。
+ *
+ * ⑥ `wheelZoomTarget` —— V119「按住 Ctrl / Command 滚轮缩放」（2026-09-22，
+ * 方案 [[Plan-20260922-212757]] §3.1）。算式逐条照抄核心 `handleWheelZoom`
+ * （`-deltaY/150`、`deltaMode` 折算 40/800、macOS 非整数 deltaY 翻倍、`clamp(z, 1, 10)`）。
+ * 这里钉住四档读数（含 deltaY = 0）；「锚点是否真的不漂移」取决于真实布局与滚动夹取，
+ * 只能真机 eval 量（基线见该方案 §3.3：误差 ≤ 0.2px）。
  */
 
 import assert from 'node:assert/strict';
@@ -53,6 +59,7 @@ const {
 	resolveViewFrame,
 	scrollToMove,
 	viewportCenter,
+	wheelZoomTarget,
 	zoomScrollDelta,
 	zoomTweenFrame,
 } = await jiti.import('../src/modal.ts');
@@ -508,4 +515,35 @@ test('打断：残留的收回与缩放走同一条缓动曲线，内容不会�
 		series.every((value, i) => i === 0 || value >= series[i - 1]),
 		`残留若按原始进度收回（与缩放错开），内容会先反向漂一下；实测轨迹 ${series.map((v) => v.toFixed(1)).join(' → ')}`,
 	);
+});
+
+test('滚轮缩放：步长、macOS 非整数翻倍、上下限、deltaMode 折算', () => {
+	// 鼠标滚轮一格（整数 deltaY，不翻倍）：±100 / 150
+	assert.equal(
+		wheelZoomTarget(1, -100, 0, false),
+		1 + 100 / 150,
+		'整数 deltaY 不翻倍，否则手感会比内置图片查看器快一倍',
+	);
+
+	// 触控板一帧（非整数 deltaY）在 macOS 上翻倍：与核心 `rd.isMacOS && !Number.isInteger(e.deltaY)` 对齐
+	const trackpad = wheelZoomTarget(1, -3.5, 0, true) - 1;
+	assert.ok(
+		Math.abs(trackpad - 2 * (3.5 / 150)) < 1e-12,
+		`macOS 上非整数 deltaY 的步长应当翻倍，实测 ${trackpad}`,
+	);
+	assert.ok(
+		Math.abs(wheelZoomTarget(1, -3.5, 0, false) - 1 - 3.5 / 150) < 1e-12,
+		'非 macOS 上同样的 deltaY 不翻倍',
+	);
+
+	// 上下限 [1, 10]：往下滚到下限就停（缩到 1× 之下只剩白边），往上到上限就停
+	assert.equal(wheelZoomTarget(1, 120, 0, false), 1);
+	assert.equal(wheelZoomTarget(10, -100, 0, false), 10);
+
+	// Electron 里量不到这两个 deltaMode，只能靠单测钉住与核心逐字对齐的折算率
+	assert.equal(wheelZoomTarget(2, -100, 1, false), 10, 'DOM_DELTA_LINE 按 40px/行折算');
+	assert.equal(wheelZoomTarget(2, 100, 2, false), 1, 'DOM_DELTA_PAGE 按 800px/页折算');
+
+	// 某些设备会派 deltaY = 0 的 wheel（横向滚动），不能让它把倍数推走
+	assert.equal(wheelZoomTarget(1.6, 0, 0, false), 1.6);
 });

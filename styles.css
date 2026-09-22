@@ -459,6 +459,7 @@
 	width: 100%;
 }
 
+.mod-text-popup .modal-content:has(.canvas-embed) .text-popup-controls,
 .mod-text-popup .modal-content:has(img) .text-popup-controls {
 	display: none;
 }
