@@ -17,13 +17,16 @@ import { createJiti } from 'jiti';
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const {
 	extractCalloutBody,
+	extractCanvasBody,
 	extractFencedBody,
 	extractImageBody,
 	extractMathBody,
 	extractQuoteBody,
 	extractTableBody,
 	isExcalidrawEmbed,
+	resolveCanvasFile,
 	resolveExcalidrawImage,
+	wikiEmbedTarget,
 } = await jiti.import('../src/extract.ts');
 
 // —— extractFencedBody ——
@@ -227,6 +230,43 @@ test('resolveExcalidrawImage 非 Excalidraw embed 找不到同名图片时也返
 	const app = fakeApp(() => null);
 	assert.equal(resolveExcalidrawImage(app, '![[file.png]]', '', 'svg'), null);
 	assert.equal(resolveExcalidrawImage(app, '![[file.canvas]]', '', 'svg'), null);
+});
+
+// —— wikiEmbedTarget / extractCanvasBody / resolveCanvasFile（V119） ——
+//
+// Canvas 独立成类之后，这三条是「一个 wiki embed 指向哪个文件」的唯一入口：
+// 候选集（session.ts）与图标（inject.ts 的 canMagnifyEmbed）两侧都走它 ——
+// 两侧各写一份就会漂移，漂移出来的就是「有图标却翻不到」的幽灵。
+
+test('wikiEmbedTarget 取 target 并去掉 |尺寸 与 #子路径', () => {
+	assert.equal(wikiEmbedTarget('![[board.canvas]]'), 'board.canvas');
+	assert.equal(wikiEmbedTarget('![[subfolder/board.canvas|300]]'), 'subfolder/board.canvas');
+	assert.equal(wikiEmbedTarget('![[board.canvas#^abc]]'), 'board.canvas');
+	assert.equal(wikiEmbedTarget('![[board.canvas#section|300]]'), 'board.canvas');
+	assert.equal(wikiEmbedTarget('不是 wiki embed'), null, '非 wiki 形态返回 null');
+	assert.equal(wikiEmbedTarget('![x](board.canvas)'), null, '圆括号形态不算');
+});
+
+test('extractCanvasBody 取文件名（关闭富文本渲染时的纯文本回退）', () => {
+	assert.equal(extractCanvasBody('![[board.canvas]]'), 'board.canvas');
+	assert.equal(extractCanvasBody('![[Canvas-20260923-084927.canvas|400]]'), 'Canvas-20260923-084927.canvas');
+	assert.equal(extractCanvasBody('没法解析的写法'), '没法解析的写法', '解析不出来时原样返回，不留空串');
+});
+
+test('resolveCanvasFile 解析 wiki embed 到 vault 内的 TFile', () => {
+	const app = fakeApp((link) => (link === 'board.canvas' ? 'folder/board.canvas' : null));
+	assert.equal(resolveCanvasFile(app, '![[board.canvas]]', 'notes/note.md')?.path, 'folder/board.canvas');
+	assert.equal(
+		resolveCanvasFile(app, '![[board.canvas|300]]', 'notes/note.md')?.path,
+		'folder/board.canvas',
+		'`|尺寸` 不影响解析',
+	);
+});
+
+test('resolveCanvasFile 找不到文件 / 不是 wiki embed 时返回 null（候选会因此被丢弃）', () => {
+	const app = fakeApp(() => null);
+	assert.equal(resolveCanvasFile(app, '![[missing.canvas]]', ''), null);
+	assert.equal(resolveCanvasFile(app, '不是 wiki embed', ''), null);
 });
 
 // —— extractTableBody ——

@@ -8,9 +8,11 @@
  *
  *   ① `qualifyEmbed` —— 认不认得出这两类。错一格就会给普通图片自建第二个容器（重复图标，
  *      因为核心对图片是**无条件**建容器的），或漏掉 Canvas；
- *   ② `canMagnifyEmbed` —— 与候选集同源。候选集来自笔记文本（`blocks.ts` 的 `wikiImageTarget`），
- *      这里的三条祖先守卫与 Excalidraw 的「同名图片回退」闸门分别对应四类「候选集里没有、
- *      图标却挂着」的幽灵条目（Callout 内 / 嵌入笔记内 / 引用行内 / 回退图片找不到）；
+ *   ② `canMagnifyEmbed` —— 与候选集同源。候选集来自笔记文本（`blocks.ts` 的 `wikiEmbedKind`），
+ *      这里的三条祖先守卫与「第四条闸门」分别对应四类「候选集里没有、图标却挂着」的幽灵条目
+ *      （Callout 内 / 嵌入笔记内 / 引用行内 / 解析不到目标文件）。第四条**两类各有一条**：
+ *      Canvas 要能解析到那个 `.canvas`（`resolveCanvasFile`，V119 起与候选侧同一个入口），
+ *      Excalidraw 要开着同名图片回退且找得到同名 SVG/PNG；
  *   ③ `removeEmbedAction` —— 摘的时候连**自建的容器**一起摘。只删按钮会留下一个空
  *      `.embed-actions` 壳（V117 表格踩过的坑，这里有同一条断言）。
  *
@@ -194,12 +196,23 @@ test('qualifyEmbed 认得出带 #^blockref 子路径的 Excalidraw src（这就�
 // —— ② canMagnifyEmbed：与候选集同源的四条闸门 ——
 
 test('canMagnifyEmbed 否决「候选集里没有它」的三种位置：嵌入笔记内 / 引用行内 / 别的可放大区块内', () => {
-	const host = makeHost();
-	const canvas = () => makeEmbed({ classes: ['canvas-embed'] });
-	const context = (selectorClasses) => ({
-		host,
-		el: makeEmbed({ classes: ['canvas-embed'], ancestors: [new FakeEl({ classes: selectorClasses })] }),
-	});
+	// 对照组要能解析到文件：canvas 的第四条闸门就是「解析得到才放行」（见下面两条），
+	// 用一个解析不到的 canvas 做对照组会把两件事混在一起。
+	const view = new MarkdownView();
+	const containerEl = new FakeEl();
+	view.containerEl = containerEl;
+	const app = makeApp({ files: { 'board.canvas': { path: 'board.canvas' } }, leaves: [{ view }] });
+	const host = makeHost({ app });
+	const canvas = () => {
+		const el = makeEmbed({ classes: ['canvas-embed'], attrs: { src: 'board.canvas' } });
+		containerEl.appendChild(el);
+		return el;
+	};
+	const context = (selectorClasses) => {
+		const el = canvas();
+		el.ancestors = [new FakeEl({ classes: selectorClasses })];
+		return { host, el };
+	};
 
 	const cases = [
 		{ name: '嵌入笔记内', ...context(['markdown-embed']) },
@@ -209,12 +222,43 @@ test('canMagnifyEmbed 否决「候选集里没有它」的三种位置：嵌入�
 	for (const entry of cases) {
 		assert.equal(canMagnifyEmbed(entry.el, entry.host, 'canvas'), false, entry.name);
 	}
-	assert.equal(canMagnifyEmbed(canvas(), host, 'canvas'), true, '对照组：干净的 canvas 应当放行');
+	assert.equal(canMagnifyEmbed(canvas(), host, 'canvas'), true, '对照组：干净且能解析到文件的 canvas 应当放行');
+});
+
+test('canMagnifyEmbed（canvas）与候选集同源：解析不到画布文件时必须为 false', () => {
+	// 候选侧（session.ts 的 canvas 分支）解析不到文件时会丢掉整条候选，图标必须同步消失 ——
+	// 否则就是「有图标却点不开」的死图标。判据走同一个 resolveCanvasFile。
+	assert.equal(
+		canMagnifyEmbed(makeEmbed({ classes: ['canvas-embed'] }), makeHost(), 'canvas'),
+		false,
+		'没有 src',
+	);
+	assert.equal(
+		canMagnifyEmbed(
+			makeEmbed({ classes: ['canvas-embed'], attrs: { src: 'missing.canvas' } }),
+			makeHost(),
+			'canvas',
+		),
+		false,
+		'src 指向的画布在 vault 里找不到（metadataCache 返回 null）',
+	);
 });
 
 test('canMagnifyEmbed（canvas）不吃 Excalidraw 的「同名图片回退」闸门', () => {
-	const host = makeHost({ settings: { excalidrawImageFallback: false } });
-	assert.equal(canMagnifyEmbed(makeEmbed({ classes: ['canvas-embed'] }), host, 'canvas'), true);
+	const view = new MarkdownView();
+	const containerEl = new FakeEl();
+	const el = makeEmbed({ classes: ['canvas-embed'], attrs: { src: 'board.canvas' } });
+	containerEl.appendChild(el);
+	view.containerEl = containerEl;
+	const app = makeApp({
+		files: { 'board.canvas': { path: '4-成果/board.canvas' } },
+		leaves: [{ view }],
+	});
+	assert.equal(
+		canMagnifyEmbed(el, makeHost({ app, settings: { excalidrawImageFallback: false } }), 'canvas'),
+		true,
+		'画布解析得到就放行 —— 与 Excalidraw 那套回退设置无关',
+	);
 });
 
 test('canMagnifyEmbed（excalidraw）与候选集同源：回退关闭 / 同名图片找不到时都必须为 false', () => {
@@ -257,8 +301,16 @@ test('removeEmbedAction 连自建的 text-popup-embed-actions 容器一起摘（
 });
 
 test('injectEmbedAction 写进自建容器且可重复调用（幂等，重渲染补回不会叠加）', () => {
-	const host = makeHost();
-	const embedEl = makeEmbed({ classes: ['canvas-embed'] });
+	const view = new MarkdownView();
+	const containerEl = new FakeEl();
+	const embedEl = makeEmbed({ classes: ['canvas-embed'], attrs: { src: 'board.canvas' } });
+	containerEl.appendChild(embedEl);
+	view.containerEl = containerEl;
+	const app = makeApp({
+		files: { 'board.canvas': { path: 'board.canvas' } },
+		leaves: [{ view }],
+	});
+	const host = makeHost({ app });
 
 	injectEmbedAction(embedEl, host, 'canvas');
 	injectEmbedAction(embedEl, host, 'canvas');
@@ -268,6 +320,25 @@ test('injectEmbedAction 写进自建容器且可重复调用（幂等，重渲�
 	assert.ok(actionsEl.classList.contains('embed-actions'), '容器必须同时带 embed-actions（白拿核心皮肤与定位）');
 	assert.equal(actionsEl.children.length, 1, '重复调用不得叠加第二个按钮');
 	assert.equal(embedEl.children.length, 1, '不得叠加第二个容器');
+});
+
+test('injectEmbedAction 在 Canvas 解析不到文件时自行摘除已注入的图标（与候选集同源，不留死图标）', () => {
+	const view = new MarkdownView();
+	const containerEl = new FakeEl();
+	const embedEl = makeEmbed({ classes: ['canvas-embed'], attrs: { src: 'board.canvas' } });
+	containerEl.appendChild(embedEl);
+	view.containerEl = containerEl;
+
+	const found = makeApp({
+		files: { 'board.canvas': { path: 'board.canvas' } },
+		leaves: [{ view }],
+	});
+	injectEmbedAction(embedEl, makeHost({ app: found }), 'canvas');
+	assert.equal(embedEl.children.length, 1, '画布在 vault 里 → 应当有图标');
+
+	// 画布被删掉 / 改名后：候选会被丢掉，图标必须同步消失
+	injectEmbedAction(embedEl, makeHost({ app: makeApp({ leaves: [{ view }] }) }), 'canvas');
+	assert.equal(embedEl.children.length, 0, '解析不到画布文件时已注入的图标必须同步消失');
 });
 
 test('injectEmbedAction 在闸门关掉后自行摘除已注入的图标（不必等下一次全量扫描）', () => {

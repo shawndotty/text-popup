@@ -9,7 +9,7 @@
  */
 
 import { setIcon } from 'obsidian';
-import { isExcalidrawEmbed, resolveExcalidrawImage } from '../extract';
+import { isExcalidrawEmbed, resolveCanvasFile, resolveExcalidrawImage } from '../extract';
 import { t } from '../lang/helpers';
 import { TextPopupModal } from '../modal';
 import { findSupportedElement } from '../tags';
@@ -167,16 +167,26 @@ export function qualifyEmbed(embedEl: HTMLElement): EmbedKind | null {
  * 2. 在嵌入笔记（`![[某笔记]]`）里：候选集来自外层笔记文本，点了定位不到。
  * 3. 在引用行（`> …`）里：整行由外层引用块覆盖。
  *
- * 第四条只对 Excalidraw 生效：候选集里那条在「关闭同名图片回退」或「找不到同名 SVG/PNG」时会被
- * createCandidate 丢掉（session.ts 的 `createCandidate`），图标必须同步消失。
+ * 第四条（**两类各一条**，都与 `createCandidate` 的对应分支同源）：
+ * - `canvas`：能解析到那个画布文件才放行 —— 解析不到时候选被丢掉（见 session.ts 的 canvas 分支），
+ *   图标必须同步消失。判据走 `resolveCanvasFile`，与候选侧**同一个入口**（两侧各写一份解析，
+ *   漂移出来的就是「有图标却翻不到」的幽灵）。
+ * - `excalidraw`：候选在「关闭同名图片回退」或「找不到同名 SVG/PNG」时会被丢掉，图标同样要消失。
  */
 export function canMagnifyEmbed(embedEl: HTMLElement, host: TextPopupHost, kind: EmbedKind): boolean {
 	if (embedEl.closest('.markdown-embed')) return false;
 	if (embedEl.closest('.cm-line.HyperMD-quote')) return false;
 	if (embedEl.closest('.cm-embed-block')) return false;
-	if (kind !== 'excalidraw') return true;
 
+	// `.internal-embed` 一定带 `src`：核心的 embed 宿主就是 `createDiv("internal-embed"); s.setAttr("src", r)`，
+	// `CanvasEmbed` 只是在同一个容器上加 `canvas-embed` 类。
 	const src = embedEl.getAttribute('src') ?? '';
+	if (kind === 'canvas') {
+		const sourcePath = containingMarkdownView(host.app, embedEl)?.file?.path ?? '';
+		return resolveCanvasFile(host.app, `![[${src}]]`, sourcePath) !== null;
+	}
+
+	// 以下只可能命中 excalidraw（EmbedKind 只有这两个取值）
 	if (!host.settings.excalidrawImageFallback) return false;
 	return (
 		resolveExcalidrawImage(

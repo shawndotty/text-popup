@@ -229,17 +229,27 @@ test('五种图片写法各产出一条单行区间，raw 是命中的语法片�
 // —— Canvas / Excalidraw wiki embed ——
 //
 // 这些不是图片扩展名（IMAGE_EXTENSIONS 不含 canvas / excalidraw / base），
-// 但 Live Preview 一样建成 `.image-embed`，所以扫描器要把它们当 image 块识别。
-// Excalidraw 在弹窗里走「同名 PNG/SVG 图片回退」（见 extract.test.mjs 的 resolveExcalidrawImage），
-// Canvas 走标准 MarkdownRenderer 嵌入（Obsidian 原生只读 SVG 预览）。
+// 但 Live Preview 一样建成 `.image-embed`，所以扫描器要把它们当嵌入块识别。
+// 两类在候选层就分开（V119）：
+//   - Excalidraw 归 `image`，弹窗走「同名 PNG/SVG 图片回退」（见 extract.test.mjs 的 resolveExcalidrawImage）；
+//   - Canvas 独立成 `canvas`，弹窗换成自研只读快照（见 canvas.test.mjs）。
+// 为什么必须分开：Canvas 的闸门是它自己的类别开关（blockKinds.canvas）与自研渲染器，
+// 混在 image 里就没法「只关 Canvas、不动图片」。Excalidraw 一行都不动是刻意的（回归网见下）。
 // Bases 不在白名单 — 本期显式不支持。
 
-test('Canvas / Excalidraw wiki embed 被识别为 image 块', () => {
+test('Canvas wiki embed 被识别为 canvas 块（独立成类，不再混进 image）', () => {
+	const cases = ['![[board.canvas]]', '![[subfolder/board.canvas|300]]'];
+	for (const line of cases) {
+		const regions = scanTextBlocks(line);
+		assert.deepEqual(outline(line), ['canvas:0-0'], `区间：${line}`);
+		assert.equal(regions[0]?.raw, line, `raw 保留原 embed 语法：${line}`);
+	}
+});
+
+test('Excalidraw wiki embed 仍归 image 块（本次一行不动，这条是它的回归网）', () => {
 	const cases = [
-		'![[board.canvas]]',
 		'![[drawing.excalidraw]]',
 		'![[drawing.excalidraw.md]]',
-		'![[subfolder/board.canvas|300]]',
 		'![[drawing.excalidraw|100]]',
 	];
 	for (const line of cases) {

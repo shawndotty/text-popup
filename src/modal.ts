@@ -332,6 +332,14 @@ export interface TextPopupBody {
 	plain: string;
 	/** 富文本输入（extractRichSource），可能为空字符串。 */
 	rich: string;
+	/**
+	 * 自渲染通道（目前只有 Canvas 快照）：拿到正文容器与一个可用的 Component，自己产出 DOM。
+	 * 存在时**优先于 `rich`**；抛错或没画出东西时由 `renderBody` 回退到 `plain`。
+	 *
+	 * 用可选方法而不是「字符串 | 函数」联合：另外七类区块的候选一行都不用改，
+	 * `TextPopupSource.read()` 的返回类型也不变。
+	 */
+	render?(el: HTMLElement, component: Component): Promise<void> | void;
 }
 
 /**
@@ -366,6 +374,8 @@ export interface TextPopupSource {
  *   算式照抄内置图片查看器的 handleWheelZoom，见 onWheel / zoomAtPoint。锚点补偿优先交给滚动
  *   （用户能自己滚回来），只有滚动放不下时才动用平移，见 settleZoomFrame。
  * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
+ * - Canvas 嵌入例外：它走 `TextPopupBody.render` 这条**自渲染通道**（见 canvas.ts），
+ *   产出的是一份只读快照 DOM，不经过 MarkdownRenderer（否则只能拿到核心的 minimap 缩略图）。
  */
 export class TextPopupModal extends Modal {
 	/** MarkdownRenderer 要求传入真实 Component，并在关闭时卸载，避免嵌入内容的事件监听泄漏。 */
@@ -381,10 +391,10 @@ export class TextPopupModal extends Modal {
 	private renderToken = 0;
 	private fontSizeValueEl: HTMLElement | null = null;
 	private zoomValueEl: HTMLElement | null = null;
-	/** 盯着 mermaid 的 svg 被异步插进来（时序见 fitMermaid）；onClose 里断开。 */
-	private mermaidObserver: MutationObserver | null = null;
+	/** 盯着 mermaid 的 svg 与 Canvas 快照被异步插进来（时序见 fitScaledContent）；onClose 里断开。 */
+	private fitObserver: MutationObserver | null = null;
 	/** 弹窗铺满窗口，窗口尺寸变了 fit 就过期；存成字段才能在 onClose 里解绑。 */
-	private resizeHandler = (): void => this.fitMermaid();
+	private resizeHandler = (): void => this.fitScaledContent();
 	/**
 	 * 视图缩放（Alt+Click 放大镜），与字号无关的纯视觉放大，1 = 原始大小。
 	 * 与字号 / 缩放是相乘关系：字号仍然照旧重排，这一层是叠在上面的 transform。
@@ -560,11 +570,12 @@ export class TextPopupModal extends Modal {
 		// 内容短时居中显示，内容长时仍可从头滚动。
 		this.scrollEl = this.contentEl.createDiv({ cls: 'text-popup-content' });
 
-		// mermaid 的 svg 是异步插进来的（实测比正文容器晚约 5ms、在另一个 task 里，见 fitMermaid），
-		// 所以除了渲染后主动算一次，还要盯着新插入的 svg 补算。
-		this.mermaidObserver = new MutationObserver(() => this.fitMermaid());
-		// 只监听 childList：fitMermaid 改的是 svg 的 style（属性变更），不会自触发成死循环。
-		this.mermaidObserver.observe(this.scrollEl, { childList: true, subtree: true });
+		// mermaid 的 svg 是异步插进来的（实测比正文容器晚约 5ms、在另一个 task 里，见 fitScaledContent），
+		// Canvas 快照的节点盒同理（`MarkdownRenderer` 是异步的）。所以除了渲染后主动算一次，
+		// 还要盯着新插入的内容补算。
+		this.fitObserver = new MutationObserver(() => this.fitScaledContent());
+		// 只监听 childList：fitScaledContent 写的是 CSS 变量（属性变更），不会自触发成死循环。
+		this.fitObserver.observe(this.scrollEl, { childList: true, subtree: true });
 		// 弹窗铺满窗口，窗口尺寸变了 fit 就过期
 		activeWindow.addEventListener('resize', this.resizeHandler);
 
@@ -612,8 +623,8 @@ export class TextPopupModal extends Modal {
 		this.cancelViewZoom();
 		this.contentEl.empty();
 		// 观察器与窗口监听都属于「弹窗存续期间」的资源，关窗必须解绑，否则会跟着窗口一直留着
-		this.mermaidObserver?.disconnect();
-		this.mermaidObserver = null;
+		this.fitObserver?.disconnect();
+		this.fitObserver = null;
 		activeWindow.removeEventListener('resize', this.resizeHandler);
 		// 移除离屏宿主，不留游离节点
 		this.source.dispose?.();
@@ -692,6 +703,32 @@ export class TextPopupModal extends Modal {
 		this.textEl?.remove();
 		this.textEl = textEl;
 
+		// 自渲染通道（目前只有 Canvas 快照）：候选自己产出 DOM，`render` 存在时优先于 `rich`。
+		// 与 rich 那条同一套生命周期：子组件挂到弹窗根组件下，随弹窗关闭自动 unload。
+		if (body.render) {
+			const child = this.component.addChild(new Component());
+			textEl.addClass('is-canvas');
+			try {
+				await body.render(textEl, child);
+			} catch (error) {
+				console.error('[text-popup] Canvas 快照渲染失败，已回退为纯文本', error);
+			}
+			if (token !== this.renderToken) {
+				// 已被后续的切换取代：丢弃本次渲染，顺手释放它的子组件
+				this.component.removeChild(child);
+				return;
+			}
+			// 判据与下面 rich 那条同一条：覆盖「只画出一张画布、没有文字」的情况。
+			// 画布空 / 坏时容器是空的 → 落到下面的 plain 分支显示文件名，不会是一屏空白。
+			if (textEl.textContent?.trim() || textEl.childElementCount > 0) {
+				this.fitScaledContent(); // 先主动算一次；晚到的异步内容由 fitObserver 补
+				return;
+			}
+			this.component.removeChild(child);
+			textEl.empty();
+			textEl.removeClass('is-canvas');
+		}
+
 		if (this.settings.renderRichText && body.rich) {
 			// 子组件挂到弹窗根组件下：addChild 随父组件的 load 状态自动 load，
 			// removeChild 会自动 unload —— 不要再手写 load / unload。
@@ -712,7 +749,7 @@ export class TextPopupModal extends Modal {
 				}
 				// 判据用「有文本 或 有子元素」，覆盖「只渲染出一张图片、没有文字」的情况。
 				if (textEl.textContent?.trim() || textEl.childElementCount > 0) {
-					this.fitMermaid(); // 先主动算一次；svg 晚到的那些由 mermaidObserver 补
+					this.fitScaledContent(); // 先主动算一次；svg 晚到的那些由 fitObserver 补
 					return;
 				}
 			} catch (error) {
@@ -727,22 +764,33 @@ export class TextPopupModal extends Modal {
 	}
 
 	/**
-	 * 让每张 mermaid 图在 scale = 1 时「一屏刚好装下」：给 svg 写 `--tp-mermaid-w`（见 styles.css）。
+	 * 让「有自己固有尺寸的异步内容」在 scale = 1 时「一屏刚好装下」。
 	 *
-	 * 为什么逐图算：各图 aspect 差得极远（实测 viewBox 100×298 ~ 546×450），共用一个全局缩放比
-	 * 必然让其中一批过大、另一批过小 —— 这正是 Plan-20260919-171610 要修的病根。
+	 * 目前两类：mermaid 的 svg（给它写 `--tp-mermaid-w`，见 styles.css）与 Canvas 只读快照
+	 * （给外层 `.text-popup-canvas-fit` 写 `--tp-canvas-fit`）。两者口径同族但**上界不同**：
+	 * mermaid 允许放大到 2 倍（`MERMAID_MAX_FIT`），画布的上界是 1（小画布不放大 —— 与图片
+	 * lightbox「按可用盒子装下、小图不放大」一致）。
+	 *
+	 * 为什么逐图算（mermaid 那条）：各图 aspect 差得极远（实测 viewBox 100×298 ~ 546×450），
+	 * 共用一个全局缩放比必然让其中一批过大、另一批过小 —— 这正是 Plan-20260919-171610 要修的病根。
 	 * 为什么读 viewBox 而不是量 svg 当前尺寸：svg 上的 width 正是我们自己在控制，量它等于拿结果
 	 * 当输入；viewBox 才是图自己的坐标系，与弹窗宽度无关。
 	 * 为什么写 CSS 变量而不是直接写 width：缩放档位变化时只需改弹窗根节点的
 	 * --text-popup-mermaid-scale（updateSize 已经在做），不必重新遍历 DOM。
 	 *
+	 * 画布那条读的是 `--tp-canvas-w/h`（画布包围盒尺寸，由 canvas.ts 写在 `.text-popup-canvas-fit`
+	 * 上），算出 fit 后写 `--tp-canvas-fit`；可用盒取的是 `.text-popup-text` 的父级
+	 * `.text-popup-content` 的内容盒，**不量 `.text-popup-text` 本身** —— 它是 width: auto 的 flex 项，
+	 * 量它会把 V119 修过的「退回 UA 300px」那个坑再挖一遍。
+	 *
 	 * 时序：svg 由 mermaid 异步插入，实测比正文容器晚约 5ms、在另一个 task 里
 	 * （`[["keydown",444419],["textEl",444419],["svg",444424]]`）—— 即 `await MarkdownRenderer.render()`
 	 * 返回与「svg 已在 DOM 里」没有保证的先后关系，只在渲染后同步量一次会偶发漏算
-	 * （漏算的那张退回 CSS fallback = 旧行为）。所以 renderBody 主动算一次 +
-	 * mermaidObserver 盯着新插入的 svg 补算；observer 回调是微任务、在 paint 之前跑，不会闪一帧。
+	 * （漏算的那张退回 CSS fallback = 旧行为）。Canvas 快照同理（节点盒要等 MarkdownRenderer）。
+	 * 所以 renderBody 主动算一次 + fitObserver 盯着新插入的内容补算；observer 回调是微任务、
+	 * 在 paint 之前跑，不会闪一帧。
 	 */
-	private fitMermaid(): void {
+	private fitScaledContent(): void {
 		const style = activeWindow.getComputedStyle(this.scrollEl);
 		const availW =
 			this.scrollEl.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
@@ -759,6 +807,15 @@ export class TextPopupModal extends Modal {
 			const width = parentW > 0 ? Math.min(availW, parentW) : availW;
 			const fit = Math.min(width / box.width, availH / box.height, MERMAID_MAX_FIT);
 			svg.style.setProperty('--tp-mermaid-w', `${(box.width * fit).toFixed(2)}px`);
+		});
+		// Canvas 快照：尺寸来自画布坐标系（1:1 当 px），上界 1 = 只缩不放
+		this.scrollEl.querySelectorAll<HTMLElement>('.text-popup-canvas-fit').forEach((fitEl) => {
+			const computed = activeWindow.getComputedStyle(fitEl);
+			const width = parseFloat(computed.getPropertyValue('--tp-canvas-w'));
+			const height = parseFloat(computed.getPropertyValue('--tp-canvas-h'));
+			if (!(width > 0) || !(height > 0)) return; // 尺寸没写上：留给 CSS 的 fallback（fit = 1）
+			const fit = Math.min(1, availW / width, availH / height);
+			fitEl.style.setProperty('--tp-canvas-fit', String(fit));
 		});
 	}
 

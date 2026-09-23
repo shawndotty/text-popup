@@ -62,6 +62,7 @@ test('blockKinds 缺键时逐键回落，已有的键保留', () => {
 		image: true,
 		quote: true,
 		table: true,
+		canvas: true,
 	});
 });
 
@@ -125,6 +126,44 @@ test('读 / 写：blockKinds.table 走嵌套路径，与其它键互不影响', 
 test('副作用表：表格开关只刷新图标（与 code / callout / math / image 同类）', () => {
 	assert.deepEqual([...settingSideEffects('blockKinds.table')], ['refreshActions']);
 	assert.ok(!settingSideEffects('blockKinds.table').includes('quoteActions'), '表格不重建装饰集');
+});
+
+// —— Canvas 开关（V119） ——
+//
+// Canvas 独立成类之后单开一个开关（见 blocks.ts 的第 8 类）。它走的是与 table（V117）
+// 完全相同的一套机械改动，「关 = 不挂图标、不进候选」—— 不是「退回核心的 minimap」。
+
+test('canvas 开关默认开启，显式关闭时被保留', () => {
+	assert.equal(DEFAULT_SETTINGS.blockKinds.canvas, true, '默认开启');
+	assert.equal(normalizeSettings({ blockKinds: { canvas: false } }).blockKinds.canvas, false, '关掉被保留');
+});
+
+test('老 data.json（没有 canvas 键）升级后自动补 true，不需要迁移脚本', () => {
+	// 落地前的 data.json 就属于这一种：只有 code / callout / math / image / quote / table 六个键
+	assert.equal(
+		normalizeSettings({
+			blockKinds: { code: true, callout: true, math: true, image: true, quote: true, table: true },
+		}).blockKinds.canvas,
+		true,
+	);
+	assert.equal(normalizeSettings({ blockKinds: 42 }).blockKinds.canvas, true, '类型不对也补默认');
+});
+
+test('读 / 写：blockKinds.canvas 走嵌套路径，与其它键互不影响', () => {
+	const settings = normalizeSettings(undefined);
+	const blockKinds = settings.blockKinds;
+	assert.equal(readSettingValue(settings, 'blockKinds.canvas'), true, '默认值');
+	assert.equal(writeSettingValue(settings, 'blockKinds.canvas', false), true, '有改动');
+	assert.equal(settings.blockKinds, blockKinds, '对象引用不变');
+	assert.equal(blockKinds.canvas, false);
+	assert.equal(blockKinds.image, true, '其它键不受影响');
+	assert.equal(readSettingValue(settings, 'blockKinds.canvas'), false, '读回来是关');
+	assert.equal(writeSettingValue(settings, 'blockKinds.canvas', false), false, '同一个值再写一次不算改动');
+});
+
+test('副作用表：Canvas 开关只刷新图标（与 code / callout / math / image / table 同类）', () => {
+	assert.deepEqual([...settingSideEffects('blockKinds.canvas')], ['refreshActions']);
+	assert.ok(!settingSideEffects('blockKinds.canvas').includes('quoteActions'), 'Canvas 不重建装饰集');
 });
 
 // —— Excalidraw 图片回退 ——
@@ -457,7 +496,7 @@ test('副作用表：只有开关与「支持的标签」会触发刷新', () =>
 		['refreshActions', 'rebuildDefinitions'],
 		'标签改动要重建定义，两个下拉的选项才跟着变',
 	);
-	for (const kind of ['callout', 'math', 'image']) {
+	for (const kind of ['callout', 'math', 'image', 'canvas']) {
 		assert.deepEqual([...settingSideEffects(`blockKinds.${kind}`)], ['refreshActions'], kind);
 	}
 });

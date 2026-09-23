@@ -29,6 +29,9 @@ export default {
 	'Magnify tables': 'Magnify tables',
 	'Show a magnifier icon for Markdown tables in Live Preview.':
 		'Show a magnifier icon for Markdown tables in Live Preview.',
+	'Magnify canvases': 'Magnify canvases',
+	'Show a magnifier icon for Canvas embeds in Live Preview, and render them as a read-only snapshot inside the popup.':
+		'Show a magnifier icon for Canvas embeds in Live Preview, and render them as a read-only snapshot inside the popup.',
 	'Popup content': 'Popup content',
 	'Render HTML and Markdown': 'Render HTML and Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":

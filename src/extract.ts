@@ -1,4 +1,4 @@
-import type { App } from 'obsidian';
+import type { App, TFile } from 'obsidian';
 import { WIKI_EMBED } from './blocks';
 import { matchTable } from './convert/forward-table';
 
@@ -112,13 +112,40 @@ export function extractImageBody(raw: string): string {
 /**
  * 判断一段 wiki embed 是否是 Excalidraw 嵌入（用于 createCandidate 分流到「同名图片回退」路径）。
  *
- * 与 `wikiImageTarget` 不同，这里只关心 `.excalidraw` / `.excalidraw.md`，Canvas 与普通图片都不算。
+ * 与 `wikiEmbedTarget` 不同，这里只关心 `.excalidraw` / `.excalidraw.md`，Canvas 与普通图片都不算。
  */
 export function isExcalidrawEmbed(rawEmbed: string): boolean {
+	const target = wikiEmbedTarget(rawEmbed);
+	return target !== null && /\.excalidraw(\.md)?$/i.test(target);
+}
+
+/**
+ * 取 `![[…]]` 的 target（去 `|尺寸` 与 `#子路径`）；不是 wiki embed 时返回 null。
+ *
+ * 三处 wiki embed 解析（`isExcalidrawEmbed` / `resolveExcalidrawImage` / `resolveCanvasFile`）
+ * 共用它，避免各写一份之后漂移 —— 那种漂移会产出「有图标却翻不到」的幽灵来源。
+ */
+export function wikiEmbedTarget(rawEmbed: string): string | null {
 	const wiki = WIKI_EMBED.exec(rawEmbed);
-	if (!wiki) return false;
-	const target = (wiki[1] ?? '').split('|')[0]?.split('#')[0]?.trim() ?? '';
-	return /\.excalidraw(\.md)?$/i.test(target);
+	if (!wiki) return null;
+	return (wiki[1] ?? '').split('|')[0]?.split('#')[0]?.trim() ?? '';
+}
+
+/**
+ * `getFirstLinkpathDest` 的结果是不是一个 vault 内的文件。
+ *
+ * 为什么用 duck typing 而不是 `instanceof TFile`：`import type` 在运行时不可用；且测试里喂的是
+ * 纯对象 mock（`{ path }`），`instanceof` 会把它们全部判假 —— 那样 extract 的用例就只能测「找不到」。
+ * 写成类型谓词（而不是 `as TFile` 断言）：类型收窄由函数自己负责，调用方拿到的是真 `TFile`。
+ */
+function isFileLike(file: unknown): file is TFile {
+	return typeof file === 'object' && file !== null && 'path' in file && typeof file.path === 'string';
+}
+
+/** `getFirstLinkpathDest` 的 duck typing 包装；解析不到时返回 null。 */
+function resolveVaultFile(app: App, linkpath: string, sourcePath: string): TFile | null {
+	const file = app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+	return isFileLike(file) ? file : null;
 }
 
 /**
@@ -137,10 +164,8 @@ export function resolveExcalidrawImage(
 	sourcePath: string,
 	preferredFormat: 'svg' | 'png',
 ): string | null {
-	const wiki = WIKI_EMBED.exec(rawEmbed);
-	if (!wiki) return null;
-	const inner = wiki[1] ?? '';
-	const target = inner.split('|')[0]?.split('#')[0]?.trim() ?? '';
+	const target = wikiEmbedTarget(rawEmbed);
+	if (target === null) return null;
 	// 把 .excalidraw 或 .excalidraw.md 后缀整个去掉，得到绘图 base 名
 	const base = target.replace(/\.excalidraw(\.md)?$/i, '');
 	if (!base) return null;
@@ -152,20 +177,33 @@ export function resolveExcalidrawImage(
 	];
 
 	for (const candidate of candidates) {
-		// `getFirstLinkpathDest` 的签名是 `(linkpath, sourcePath) => TFile | null`，这里只用 `.path`
-		// 字段做 duck typing — 既兼容生产环境的真 TFile，也兼容测试里的纯对象 mock。
-		// `import type` 在运行时不可用，不能写 `instanceof TFile`。
-		const file: unknown = app.metadataCache.getFirstLinkpathDest(candidate, sourcePath);
-		if (
-			typeof file === 'object' &&
-			file !== null &&
-			'path' in file &&
-			typeof file.path === 'string'
-		) {
-			return file.path;
-		}
+		const file = resolveVaultFile(app, candidate, sourcePath);
+		if (file) return file.path;
 	}
 	return null;
+}
+
+/**
+ * `![[x.canvas]]` → vault 内的 TFile（找不到返回 null）。
+ *
+ * 与 `resolveExcalidrawImage` 同形：同一个 `getFirstLinkpathDest` + 类型守卫，
+ * 只是 canvas 就是本体、没有「同名图片」这一层改写。
+ */
+export function resolveCanvasFile(app: App, rawEmbed: string, sourcePath: string): TFile | null {
+	const target = wikiEmbedTarget(rawEmbed);
+	if (!target) return null;
+	return resolveVaultFile(app, target, sourcePath);
+}
+
+/**
+ * Canvas 的纯文本回退：取 wiki embed 的 target（例如 `Canvas-20260923-084927.canvas`）。
+ *
+ * 与 `extractImageBody` 的取舍不同：canvas 没有 alt 的概念（`|300` 只是画布宽），
+ * 关闭「渲染 HTML 与 Markdown」时最能说明「点开的是哪张画布」的就是文件名。
+ * 解析不出来时原样返回（返回空串会让候选被当成空块丢掉）。
+ */
+export function extractCanvasBody(raw: string): string {
+	return wikiEmbedTarget(raw) || raw;
 }
 
 /**

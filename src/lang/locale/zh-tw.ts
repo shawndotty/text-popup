@@ -29,6 +29,9 @@ const zhTW: Partial<typeof en> = {
 	'Magnify tables': '放大表格',
 	'Show a magnifier icon for Markdown tables in Live Preview.':
 		'為即時預覽裡的 Markdown 表格顯示放大圖示。',
+	'Magnify canvases': '放大 Canvas',
+	'Show a magnifier icon for Canvas embeds in Live Preview, and render them as a read-only snapshot inside the popup.':
+		'為即時預覽裡的 Canvas 嵌入顯示放大圖示，並在彈窗內渲染為唯讀快照。',
 	'Popup content': '彈窗內容',
 	'Render HTML and Markdown': '渲染 HTML 與 Markdown',
 	"Render the block's HTML and Markdown inside the popup. When off, the content is shown as plain text.":

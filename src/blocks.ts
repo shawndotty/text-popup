@@ -23,6 +23,12 @@
  * （见 scanner/inject.ts 的 `injectTableAction`）。起始判据直接复用 `convert/forward-table.ts`
  * 的 `matchTable` —— 两处判据漂移就会产出本仓库最忌讳的「有图标却翻不到」的幽灵。
  *
+ * 第 8 类 `canvas` 与 `image` 同源（同为 wiki embed、同为 `.image-embed` 容器），但**渲染器不同**：
+ * 核心把 canvas 交给 CanvasEmbed 画一张 minimap SVG（缩略图，看不到节点内容），本插件改成
+ * 自研只读快照（见 canvas.ts）。所以它必须在**候选层**就与普通图片分开 —— 独立成类，
+ * 顺带白拿一个独立的类别开关（`blockKinds.canvas`）。判据仍是扩展名，只是从「一个 bool」
+ * 变成「一个类别」（见 `wikiEmbedKind`）。
+ *
  * 为什么不用 DOM：Live Preview 只把视口附近的行渲染成 DOM，滚出视口的块连按钮都没有，
  * 于是「能翻到几条」会随滚动变化。数量必须是笔记的属性，不能是屏幕的属性。
  */
@@ -54,8 +60,16 @@ const INLINE_TAGS = new Set(
 /** 核心对这几类标签不建 widget（`obsidian.asar` 里的排除表），扫描同样跳过。 */
 const SKIPPED_TAGS = new Set(['script', 'style', 'link', 'meta', 'object', 'embed', 'webview']);
 
-/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余六类是 Obsidian 原生区块。 */
-export type BlockKind = 'html' | 'code' | 'callout' | 'math' | 'image' | 'quote' | 'table';
+/** 可放大的区块类别。`html` = 用户手写的块级原始 HTML，其余七类是 Obsidian 原生区块。 */
+export type BlockKind =
+	| 'html'
+	| 'code'
+	| 'callout'
+	| 'math'
+	| 'image'
+	| 'quote'
+	| 'table'
+	| 'canvas';
 
 /** 一个可放大区间；行号 0 起，与 Editor 的行号一致。 */
 export interface TextBlockRegion {
@@ -66,8 +80,8 @@ export interface TextBlockRegion {
 	 * 该区间的原始文本，与核心 widget 的输入一致：前四类含围栏 / `> ` 前缀 / `$$`，
 	 * 引用块含每行的 `> ` 前缀（喂给 `MarkdownRenderer` 正好渲染成一个 `<blockquote>`）；
 	 * 表格就是那几行 `| a | b |` 原文（`MarkdownRenderer` 会认出表格）；
-	 * `image` 类是**命中的那段图片语法**（不是整行 —— 引用行 / 列表行的 `> ` / `- ` 前缀
-	 * 喂给 MarkdownRenderer 会多渲染出一层引用块 / 列表项）。
+	 * `image` / `canvas` 类是**命中的那段嵌入语法**（不是整行 —— 引用行 / 列表行的 `> ` / `- `
+	 * 前缀喂给 MarkdownRenderer 会多渲染出一层引用块 / 列表项）。
 	 */
 	raw: string;
 }
@@ -314,8 +328,8 @@ export const MD_IMAGE = /!\[[^\]\n]*\]\(([^)\n]+)\)/;
 const HTML_TAG = /<\/?[a-zA-Z][^>\n]*>/;
 
 /**
- * 非图片、但 Live Preview 一样建成 `.image-embed` 的 wiki embed 扩展名：
- *   - `canvas`：Obsidian 1.1+ 原生白板，嵌入是只读 SVG 预览
+ * 非图片扩展名、但 Live Preview 一样建成 `.image-embed` 的 wiki embed 扩展名：
+ *   - `canvas`：Obsidian 1.1+ 原生白板，嵌入是核心的 minimap SVG —— 本插件改成自研只读快照
  *   - `excalidraw` / `excalidraw.md`：Excalidraw 插件，弹窗走「同名 PNG/SVG 图片回退」
  *     （见 extract.ts 的 resolveExcalidrawImage）
  *
@@ -325,20 +339,29 @@ const HTML_TAG = /<\/?[a-zA-Z][^>\n]*>/;
  * `.excalidraw.md` 是双层扩展名，`hasImageExtension` 的 `lastIndexOf('.')` 只能取到 `md`，
  * 所以这里用 `endsWith` 单独判，其余单层扩展名仍走 `lastIndexOf('.')`。
  */
-const EMBEDDABLE_NON_IMAGE_EXTENSIONS = ['canvas'];
-const EMBEDDABLE_NON_IMAGE_SUFFIXES = ['.excalidraw', '.excalidraw.md'];
+const CANVAS_EXTENSIONS = ['canvas'];
+const EXCALIDRAW_SUFFIXES = ['.excalidraw', '.excalidraw.md'];
 
-function hasEmbeddableNonImageExtension(target: string): boolean {
-	const lower = target.toLowerCase();
-	if (EMBEDDABLE_NON_IMAGE_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return true;
-	const dot = target.lastIndexOf('.');
-	return dot > 0 && EMBEDDABLE_NON_IMAGE_EXTENSIONS.includes(target.slice(dot + 1).toLowerCase());
+/** wiki embed 捕获组里的 target：去掉 `|尺寸` 与 `#子路径`。 */
+function wikiTarget(inner: string): string {
+	return (inner.split('|')[0] ?? '').split('#')[0]?.trim() ?? '';
 }
 
-/** wiki 形态：target 必须是图片或可放大嵌入（`![[某笔记]]` / `![[x.pdf]]` 都不是图片嵌入）。 */
-function wikiImageTarget(inner: string): string | null {
-	const target = (inner.split('|')[0] ?? '').split('#')[0]?.trim() ?? '';
-	return hasImageExtension(target) || hasEmbeddableNonImageExtension(target) ? target : null;
+/**
+ * wiki 形态的 target 属于哪一类。`canvas` 独立成类（换渲染器 + 独立开关）；
+ * `excalidraw` 仍归 `'image'` —— 它今天就是靠 `isExcalidrawEmbed` 在 createCandidate 里分流的，
+ * 闸门是「Excalidraw 图片回退」而不是类别开关，本次**一行都不动**。
+ *
+ * 判据的取值与改造前 `hasImageExtension(target) || hasEmbeddableNonImageExtension(target)`
+ * 逐字相同，只是从「一个 bool」变成「一个类别」。
+ */
+function wikiEmbedKind(target: string): 'image' | 'canvas' | null {
+	const lower = target.toLowerCase();
+	if (EXCALIDRAW_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return 'image';
+	const dot = target.lastIndexOf('.');
+	const ext = dot > 0 ? lower.slice(dot + 1) : '';
+	if (CANVAS_EXTENSIONS.includes(ext)) return 'canvas';
+	return hasImageExtension(target) ? 'image' : null;
 }
 
 /**
@@ -462,7 +485,11 @@ function firstHitOutsideCode(
 }
 
 /**
- * 图片：单行区间。
+ * 图片 / Canvas：单行区间。
+ *
+ * Canvas 也在这里命中（两者同为 wiki embed、同为 `.image-embed` 容器，四条行级排除完全共用），
+ * 只是返回的 `kind` 由 `wikiEmbedKind` 按扩展名分流成 `'canvas'` —— 换渲染器的那一类需要在
+ * 候选层就与普通图片分开，见文件头「第 8 类」。
  *
  * 四条行级排除都来自真机实测（命中它们时核心不建 `.image-embed`，放进候选就是「能翻到、
  * 但永远没有图标」的幽灵条目）：**相对所在列表项的内容列多出 4 列**才是缩进代码块
@@ -489,16 +516,21 @@ function matchImageBlock(lines: readonly string[], start: number): BlockMatch | 
 	const ranges = inlineCodeRanges(line);
 	const wiki = firstHitOutsideCode(line, WIKI_EMBED, ranges);
 	const md = wiki ? null : firstHitOutsideCode(line, MD_IMAGE, ranges);
-	const target = wiki ? wikiImageTarget(wiki[1] ?? '') : md ? pathImageTarget(md[1] ?? '') : null;
 	const hit = wiki ?? md;
-	if (!target || !hit) return null;
+	if (!hit) return null;
+
+	// wiki 形态按 target 分流（canvas 独立成类）；圆括号形态只过图片白名单，恒为 `image`
+	let kind: 'image' | 'canvas' | null;
+	if (wiki) kind = wikiEmbedKind(wikiTarget(wiki[1] ?? ''));
+	else kind = pathImageTarget(md?.[1] ?? '') ? 'image' : null;
+	if (!kind) return null;
 
 	// 命中片段之外的文字里若还有标签，说明这张图在行内 HTML widget 内（没有 `.embed-actions`）
 	const rest = line.slice(0, hit.index) + line.slice(hit.index + hit[0].length);
 	if (HTML_TAG.test(rest)) return null;
 
 	// raw 只存命中的那段语法：整行喂给 MarkdownRenderer 会多出一层引用块 / 列表项
-	return { kind: 'image', endLine: start, include: true, raw: hit[0] };
+	return { kind, endLine: start, include: true, raw: hit[0] };
 }
 
 /**

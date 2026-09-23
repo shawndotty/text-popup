@@ -6,9 +6,9 @@ import type TextPopupPlugin from './main';
 import { notifyQuoteActionsChanged, refreshTextPopupActions } from './scanner';
 import { DEFAULT_TAGS, normalizeTagList } from './tags';
 
-/** 六类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
+/** 七类 Obsidian 原生区块的开关；块级原始 HTML 由「支持的标签」控制，不在这里。 */
 export type BlockKindSettings = Record<
-	'code' | 'callout' | 'math' | 'image' | 'quote' | 'table',
+	'code' | 'callout' | 'math' | 'image' | 'quote' | 'table' | 'canvas',
 	boolean
 >;
 
@@ -25,7 +25,7 @@ export interface TextPopupSettings {
 	popupFontSize: number;
 	/** 被标记时触发放大的标签列表（设置页可编辑）。 */
 	supportedTags: string[];
-	/** 代码块 / Callout / 数学块 / 图片 / 引用块 / 表格是否显示放大图标。 */
+	/** 代码块 / Callout / 数学块 / 图片 / 引用块 / 表格 / Canvas 是否显示放大图标。 */
 	blockKinds: BlockKindSettings;
 	/** `Popup Selected Text` 包裹单行选区用的标签；必须是 supportedTags 里的块级标签。 */
 	singleLineTag: string;
@@ -49,7 +49,15 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	popupTextColor: '',
 	popupFontSize: 16,
 	supportedTags: [...DEFAULT_TAGS],
-	blockKinds: { code: true, callout: true, math: true, image: true, quote: true, table: true },
+	blockKinds: {
+		code: true,
+		callout: true,
+		math: true,
+		image: true,
+		quote: true,
+		table: true,
+		canvas: true,
+	},
 	singleLineTag: 'p',
 	multiLineTag: 'div',
 	excalidrawImageFallback: false,
@@ -92,6 +100,7 @@ function readBlockKinds(value: unknown): BlockKindSettings {
 		image: readBoolean(data.image, DEFAULT_SETTINGS.blockKinds.image),
 		quote: readBoolean(data.quote, DEFAULT_SETTINGS.blockKinds.quote),
 		table: readBoolean(data.table, DEFAULT_SETTINGS.blockKinds.table),
+		canvas: readBoolean(data.canvas, DEFAULT_SETTINGS.blockKinds.canvas),
 	};
 }
 
@@ -173,6 +182,7 @@ export type SettingKey =
 	| 'blockKinds.image'
 	| 'blockKinds.quote'
 	| 'blockKinds.table'
+	| 'blockKinds.canvas'
 	| 'popupBackgroundFollowTheme'
 	| 'popupBackgroundColor'
 	| 'popupTextFollowTheme'
@@ -191,7 +201,7 @@ const NO_EFFECTS: readonly SettingEffect[] = [];
 
 /**
  * 副作用表（照抄改造前 `display()` 里 13 个 `onChange` 的行为，不加不减）：
- * `enabled` 与 6 个 `blockKinds.*` 要立刻同步图标，`quote` 另发一次装饰集信号，
+ * `enabled` 与 7 个 `blockKinds.*` 要立刻同步图标，`quote` 另发一次装饰集信号，
  * `supportedTags` 还要重建定义（两个下拉的选项要跟着变），其余键只保存。
  */
 export function settingSideEffects(key: SettingKey): readonly SettingEffect[] {
@@ -205,6 +215,7 @@ export function settingSideEffects(key: SettingKey): readonly SettingEffect[] {
 		case 'blockKinds.math':
 		case 'blockKinds.image':
 		case 'blockKinds.table':
+		case 'blockKinds.canvas':
 			return ['refreshActions'];
 		case 'supportedTags':
 			return ['refreshActions', 'rebuildDefinitions'];
@@ -228,6 +239,8 @@ export function readSettingValue(settings: TextPopupSettings, key: SettingKey): 
 			return settings.blockKinds.quote;
 		case 'blockKinds.table':
 			return settings.blockKinds.table;
+		case 'blockKinds.canvas':
+			return settings.blockKinds.canvas;
 		// 空字符串 = 跟随主题；颜色控件表示不了空值，跟随主题时就给备用色
 		case 'popupBackgroundFollowTheme':
 			return settings.popupBackgroundColor === '';
@@ -293,6 +306,8 @@ export function writeSettingValue(
 			return assignBlockKind(settings, 'quote', value);
 		case 'blockKinds.table':
 			return assignBlockKind(settings, 'table', value);
+		case 'blockKinds.canvas':
+			return assignBlockKind(settings, 'canvas', value);
 		case 'supportedTags':
 			return assignSupportedTags(settings, value);
 		case 'excalidrawImageFallback':
@@ -430,6 +445,13 @@ export class TextPopupSettingTab extends PluginSettingTab {
 						name: t('Magnify tables'),
 						desc: t('Show a magnifier icon for Markdown tables in Live Preview.'),
 						control: { type: 'toggle', key: 'blockKinds.table', disabled: blockKindDisabled },
+					},
+					{
+						name: t('Magnify canvases'),
+						desc: t(
+							'Show a magnifier icon for Canvas embeds in Live Preview, and render them as a read-only snapshot inside the popup.',
+						),
+						control: { type: 'toggle', key: 'blockKinds.canvas', disabled: blockKindDisabled },
 					},
 				],
 			},

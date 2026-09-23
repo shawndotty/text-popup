@@ -97,11 +97,15 @@ export function refreshTextPopupActions(host: TextPopupHost): void {
 	});
 
 	// 第六处注入点：Canvas 嵌入 + 被 Excalidraw 接管的图片嵌入（都没有核心建的 .embed-actions）。
-	// 与图片同吃「放大图片」这一个开关 —— 它们的候选本来就归在 kind: 'image'（见 blocks.ts 的 wikiImageTarget）。
+	// 类别开关分两类：Canvas 吃「放大 Canvas」（它现在是独立的 kind，候选也归它），
+	// Excalidraw 仍吃「放大图片」—— 它今天就是靠「同名图片回退」进 image 候选的，本次一行不动。
+	// 「可解析性」那条闸门不在这里，而在 injectEmbedAction → canMagnifyEmbed 里（与 Excalidraw 同法）：
+	// 类别开关管「要不要这类」，能不能解析管「这一条有没有」。
 	activeDocument.querySelectorAll<HTMLElement>(EMBED_SELECTOR).forEach((embedEl) => {
 		const kind = qualifyEmbed(embedEl);
 		if (!kind) return;
-		if (isKindEnabled(host.settings, 'image')) injectEmbedAction(embedEl, host, kind);
+		const key = kind === 'canvas' ? 'canvas' : 'image';
+		if (isKindEnabled(host.settings, key)) injectEmbedAction(embedEl, host, kind);
 		else removeEmbedAction(embedEl);
 	});
 }

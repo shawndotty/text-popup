@@ -295,6 +295,110 @@
 	overflow-wrap: break-word;
 }
 
+/* Canvas 只读快照（V119）。为什么不是核心的 minimap、路线取舍见 Plan-20260923-093506。
+
+   坐标系 = 画布坐标 1:1（原点在包围盒左上角），整体靠 --tp-canvas-fit 缩到一屏装下：
+   ① 画布本身（.text-popup-canvas）保持画布坐标的绝对尺寸，只做 transform: scale(fit)；
+   ② 外层 .text-popup-canvas-fit 的宽高是缩放后的盒 —— .text-popup-text 是 width: auto 的 flex 项，
+      若只写 transform，父级仍按未缩放的尺寸算、居中与滚动都会偏（且会再度踩回 V119 那个
+      「退回 UA 300px」的坑，见上面 .canvas-embed 那条注释）。用 calc(长度 × 数字) 拿到确定值。
+   ③ transform-origin: 0 0 与 .text-popup-text 同源：左上角缩放，弹窗既有的两条手势
+      （Ctrl/Cmd+滚轮以指针为锚、Alt+点击推到中心）才能原样复用，一行都不用改。
+
+   放大走 --text-popup-view-scale（.is-view-zoomed .text-popup-text），本文件的快照规则不参与。
+   --tp-canvas-w / --tp-canvas-h 由 canvas.ts 写在 .text-popup-canvas-fit 上（= 包围盒尺寸），
+   --tp-canvas-fit 由 modal.ts 的 fitScaledContent() 按内容区可用盒算出来（上界 1 = 小画布不放大）。 */
+
+.mod-text-popup .text-popup-canvas-fit {
+	width: calc(var(--tp-canvas-w, 0px) * var(--tp-canvas-fit, 1));
+	height: calc(var(--tp-canvas-h, 0px) * var(--tp-canvas-fit, 1));
+}
+
+.mod-text-popup .text-popup-canvas {
+	position: relative;
+	width: var(--tp-canvas-w, 0px);
+	height: var(--tp-canvas-h, 0px);
+	transform: scale(var(--tp-canvas-fit, 1));
+	transform-origin: 0 0;
+}
+
+/* 连线图层。viewBox 用的是画布坐标，所以 path 的 d 不用再减原点。
+   pointer-events: none 只给 svg：连线不该抢点击，节点里的文字 / 链接仍可选可点。
+   stroke / fill 直接引用 --canvas-color（核心在 body 上声明了默认灰，.mod-canvas-color-N 会覆盖它），
+   所以本插件里一个颜色常量都没有。 */
+.mod-text-popup .text-popup-canvas-edges {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+	pointer-events: none;
+}
+
+.mod-text-popup .text-popup-canvas-edge {
+	fill: none;
+	stroke: var(--canvas-color);
+	stroke-width: 2;
+}
+
+/* 箭头是 canvas.ts 自己算出来的三角形（不用 <marker>：marker 在 <defs> 里、不在 path 的继承链上，
+   想让箭头跟着每条边的 --canvas-color 走就得依赖 context-stroke 或为每种颜色各建一个 marker）。 */
+.mod-text-popup .text-popup-canvas-arrow {
+	fill: var(--canvas-color);
+	stroke: none;
+}
+
+/* 节点盒：与核心 .canvas-node-container 同口径（白底 + 主题色描边 + 圆角 + 裁掉溢出）。
+   坐标 / 尺寸由 canvas.ts 写内联 style（画布坐标 px）。 */
+.mod-text-popup .text-popup-canvas-node {
+	position: absolute;
+	background: var(--background-primary);
+	border: 1px solid var(--canvas-color);
+	border-radius: var(--radius-m);
+	overflow: hidden;
+}
+
+/* 节点内容：字号**固定** 16px（= 画布坐标 1:1），不跟随弹窗字号 ——
+   节点盒的宽高来自画布 JSON，字号一变文字就溢出、被上面的 overflow: hidden 裁掉。
+   「放大」由弹窗既有的手势（Ctrl/Cmd+滚轮、Alt+点击、字号 +/− 之外的视图缩放）负责。
+   这一层同时也是「不继承 --text-popup-font-size」的闸门。 */
+.mod-text-popup .text-popup-canvas-node-content {
+	padding: var(--size-4-2) var(--size-4-3);
+	font-size: 16px;
+	line-height: 1.35;
+}
+
+/* 组：背景单独一层，自己带透明度 —— 直接给组盒写 opacity 会把 label 一起淡化（12% 下读不出来）。 */
+.mod-text-popup .text-popup-canvas-group {
+	position: absolute;
+}
+
+.mod-text-popup .text-popup-canvas-group-bg {
+	position: absolute;
+	inset: 0;
+	background: var(--canvas-color);
+	border-radius: var(--radius-m);
+	opacity: 0.12;
+}
+
+/* 组标题顶在组盒左上角外沿（与核心画布一致的视觉位置）；不换行，超出就省略。 */
+.mod-text-popup .text-popup-canvas-group-label {
+	position: absolute;
+	left: 0;
+	top: calc(-1 * var(--size-4-4));
+	max-width: 100%;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* 快照模式：与 .is-rich 同一处方 —— 不能沿用 .is-plain 的 pre-wrap，
+   而且拖拽换行要交给 div 的正常排版。 */
+.mod-text-popup .text-popup-text.is-canvas {
+	white-space: normal;
+	overflow-wrap: break-word;
+}
+
 /* 图片：与核心 lightbox 同口径——按可用高度整体装下（等比、不放大），并忽略 Markdown 尺寸语法。
    ① max-height 的参照必须是容器查询单位 cqh（= .text-popup-content 内容盒高）：图片的包含块是
       正文里的 <p>、高度 auto，写百分比会解析成 none、等于没写（核心能写 100% 是因为 .media-wrapper

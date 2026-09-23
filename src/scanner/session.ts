@@ -6,8 +6,11 @@ import { MarkdownView, sanitizeHTMLToDom } from 'obsidian';
 import type { Editor, TFile } from 'obsidian';
 import { scanTextBlocks } from '../blocks';
 import type { TextBlockRegion } from '../blocks';
+import { parseCanvasDocument, renderCanvasSnapshot } from '../canvas';
+import type { CanvasDocument } from '../canvas';
 import {
 	extractCalloutBody,
+	extractCanvasBody,
 	extractFencedBody,
 	extractImageBody,
 	extractMathBody,
@@ -16,6 +19,7 @@ import {
 	extractTableBody,
 	extractText,
 	isExcalidrawEmbed,
+	resolveCanvasFile,
 	resolveExcalidrawImage,
 } from '../extract';
 import { TextPopupModal } from '../modal';
@@ -101,7 +105,7 @@ function locateStartIndex(
 /**
  * 组装一次弹窗会话的导航来源。
  *
- * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，七类区间按类别开关过滤），不是 DOM：
+ * 候选集来自**被点击按钮所在窗格的笔记文本**（`scanTextBlocks`，八类区间按类别开关过滤），不是 DOM：
  * Live Preview 只渲染视口附近的块，以 DOM 为准会让「总数」随滚动 / 光标 / 分屏变化。
  * 打开时算一次、提取一次，弹窗打开期间不再重采 —— 标题的总数与正文永远同源。
  */
@@ -197,8 +201,9 @@ function buildPopupSession(
 /**
  * 一个区间 → 一个候选；内容为空（点了会弹空白屏）时返回 null。
  *
- * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素。
- * 另外六类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
+ * `html` 走 1.0.3 的老路：离屏 `sanitizeHTMLToDom` 渲染后按「支持的标签」找目标元素；
+ * `canvas` 另走一条：解析到文件后由 canvas.ts 渲染只读快照（见上面的分支）；
+ * 其余六类是纯字符串处理，不需要 DOM，也不需要离屏宿主 —— `measure` 因此是惰性函数，
  * 只有真的遇到 html 区间才会建出那个游离节点。
  */
 function createCandidate(
@@ -220,6 +225,35 @@ function createCandidate(
 				const plain = extractText(target);
 				const rich = host.settings.renderRichText ? extractRichSource(target) : '';
 				return plain || rich ? { plain, rich } : null;
+			},
+		};
+	}
+
+	// Canvas 嵌入：不走 MarkdownRenderer（那只能拿到核心的 minimap 缩略图），改走「自渲染通道」——
+	// 由 canvas.ts 把画布 JSON 画成一份只读快照。解析不到文件就不产候选（与 canMagnifyEmbed 同源，
+	// 不留「有图标却点不开」的死图标）。
+	if (region.kind === 'canvas') {
+		const file = resolveCanvasFile(host.app, region.raw, sourcePath);
+		if (!file) {
+			console.warn(`[text-popup] Canvas 文件未找到：${region.raw}`);
+			return null;
+		}
+		const plain = extractCanvasBody(region.raw);
+		// 惰性解析 + 缓存：方向键来回翻同一条时不必重复 JSON.parse；DOM 每次重建
+		// （缓存 DOM 会让上一次的 Component 卸载后留下失效的链接监听，得不偿失）。
+		let doc: CanvasDocument | null | undefined;
+		return {
+			region,
+			read: () => {
+				if (!host.settings.renderRichText) return plain ? { plain, rich: '' } : null;
+				return {
+					plain,
+					rich: '',
+					render: async (el, component) => {
+						doc ??= parseCanvasDocument(await host.app.vault.cachedRead(file));
+						if (doc) await renderCanvasSnapshot(el, doc, { app: host.app, sourcePath: file.path, component });
+					},
+				};
 			},
 		};
 	}
@@ -263,7 +297,7 @@ function createCandidate(
 	};
 }
 
-/** 六类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
+/** 七类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
 export function readTextBody(region: TextBlockRegion): string {
 	switch (region.kind) {
 		case 'code':
@@ -278,6 +312,8 @@ export function readTextBody(region: TextBlockRegion): string {
 			return extractQuoteBody(region.raw);
 		case 'table':
 			return extractTableBody(region.raw);
+		case 'canvas':
+			return extractCanvasBody(region.raw);
 		default:
 			return '';
 	}
