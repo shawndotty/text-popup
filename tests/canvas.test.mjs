@@ -24,6 +24,7 @@ const jiti = createJiti(import.meta.url, {
 const {
 	CANVAS_PADDING,
 	canvasBounds,
+	canvasEmbedText,
 	edgeArrowPath,
 	edgeEndpoints,
 	edgePath,
@@ -90,6 +91,20 @@ test('parseCanvasDocument 保留 color / file / url / label，缺省时不塞空
 	assert.equal(doc.nodes[1].file, 'note.md');
 	assert.equal(doc.nodes[2].url, 'https://a.b');
 	assert.equal('text' in doc.nodes[3], false, '空字符串字段不收（省得绘制层再判一次空）');
+});
+
+test('parseCanvasDocument 保留 file 节点的 subpath（缩小至标题 / 块），空串同样不落键', () => {
+	const doc = parseCanvasDocument(
+		JSON.stringify({
+			nodes: [
+				{ id: 'f', type: 'file', x: 0, y: 0, width: 10, height: 10, file: 'a.md', subpath: '#2. 强调与标记' },
+				{ id: 'e', type: 'file', x: 0, y: 0, width: 10, height: 10, file: 'b.md', subpath: '' },
+			],
+		}),
+	);
+	assert.ok(doc);
+	assert.equal(doc.nodes[0].subpath, '#2. 强调与标记', 'subpath 逐字保留（含空格与点）');
+	assert.equal('subpath' in doc.nodes[1], false, '空串不收 —— 与 color / file / url / label 同一口径');
 });
 
 test('parseCanvasDocument 对坏输入一律返回 null（调用方因此回退纯文本）', () => {
@@ -255,4 +270,18 @@ test('edgeArrowPath 对「同节点同 side」的退化边也画得出箭头（�
 test('edgeArrowPath 端点缺失 → null（调用方跳过箭头，连线本身照画）', () => {
 	assert.equal(edgeArrowPath(undefined, 'right', box(0, 0, 10, 10), 'left'), null);
 	assert.equal(edgeArrowPath(box(0, 0, 10, 10), 'right', undefined, 'left'), null);
+});
+
+// —— canvasEmbedText ——
+
+/** file 节点的最小形态（只带本函数读的两个字段）。 */
+function fileNode(file, subpath) {
+	return { id: 'f', type: 'file', x: 0, y: 0, width: 10, height: 10, file, subpath };
+}
+
+test('canvasEmbedText 把 subpath 拼进 ![[…]]（标题 / 块 / 无 / 非法四种输入）', () => {
+	assert.equal(canvasEmbedText(fileNode('a.md', '#2. 强调与标记')), '![[a.md#2. 强调与标记]]', '缩小至标题');
+	assert.equal(canvasEmbedText(fileNode('b.md', '#^abc123')), '![[b.md#^abc123]]', '缩小至块');
+	assert.equal(canvasEmbedText(fileNode('c.md', undefined)), '![[c.md]]', '没有 subpath = 整篇（对既有画布是恒等操作）');
+	assert.equal(canvasEmbedText(fileNode('d.md', '2. 强调')), '![[d.md]]', '非法 subpath（无 #）忽略 → 退回整篇');
 });

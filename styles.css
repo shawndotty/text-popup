@@ -158,6 +158,13 @@
 	display: none;
 }
 
+
+/* Canvas Embed Markdown Embed Style */
+
+.mod-text-popup .text-popup-text.is-canvas .markdown-embed {
+	border-inline-start: 0;
+}
+
 /* 弹窗：铺满 Obsidian 应用窗口，默认跟随主题；设置项对应下面三个变量。
    覆盖 --modal-background（核心的 .modal { background-color: var(--modal-background) }）
    让标题栏与内容区同色，而不是只染内容区。

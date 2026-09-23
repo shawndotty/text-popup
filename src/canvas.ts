@@ -42,6 +42,8 @@ export interface CanvasNode {
 	text?: string;
 	/** `file` 节点的链接目标（笔记 / 图片 / 画布…）。 */
 	file?: string;
+	/** `file` 节点的「缩小」子路径：`#标题` / `#^块id` / `#page=N` / `#视图名`。没有 = 显示整篇。 */
+	subpath?: string;
 	/** `link` 节点的外链地址。 */
 	url?: string;
 	/** `group` 节点的标题。 */
@@ -114,7 +116,7 @@ function readNode(value: unknown): CanvasNode | null {
 		width: raw.width as number,
 		height: raw.height as number,
 	};
-	for (const key of ['color', 'text', 'file', 'url', 'label'] as const) {
+	for (const key of ['color', 'text', 'file', 'url', 'label', 'subpath'] as const) {
 		const field = readOptionalString(raw, key);
 		if (field !== undefined) node[key] = field;
 	}
@@ -314,6 +316,21 @@ export function edgeArrowPath(
 	return `M ${line.x2} ${line.y2} L ${baseX + px} ${baseY + py} L ${baseX - px} ${baseY - py} Z`;
 }
 
+/**
+ * file 节点的嵌入文本：`![[文件]]`，卡片被「缩小至标题 / 块」时带 `#子路径`。
+ *
+ * 为什么拼接就够、不用自己切内容：核心画布卡片干的就是这件事 ——
+ * `{ linktext: filePath + subpath }` 交给同一套 embed 管线（`W1.load`），与本插件
+ * `MarkdownRenderer.render` 的入口相同；切标题 / 切块由核心的 PD / ID 完成（见 [[Plan-20260923-105138]] §2.3）。
+ *
+ * 非法 subpath（不以 `#` 开头，只可能来自手改的 `.canvas`）**忽略**：盲拼会拼出一个解析不到的
+ * 链接、卡片里变成一串未解析文字；忽略则退回整篇（弹窗是可读优先的只读浏览器）。
+ */
+export function canvasEmbedText(node: CanvasNode): string {
+	const subpath = node.subpath?.startsWith('#') ? node.subpath : '';
+	return `![[${node.file ?? ''}${subpath}]]`;
+}
+
 // ——————————————————————————————————————————————————————————————
 // DOM 层
 // ——————————————————————————————————————————————————————————————
@@ -384,14 +401,9 @@ async function renderNodeContent(
 			await MarkdownRenderer.render(host.app, node.text ?? '', contentEl, host.sourcePath, host.component);
 			return;
 		case 'file':
-			// 与笔记里的写法一致：笔记 / 图片 / 嵌套嵌入都由核心按 `![[…]]` 渲染
-			await MarkdownRenderer.render(
-				host.app,
-				`![[${node.file ?? ''}]]`,
-				contentEl,
-				host.sourcePath,
-				host.component,
-			);
+			// 与笔记里的写法一致：笔记 / 图片 / 嵌套嵌入都由核心按 `![[…]]` 渲染；
+			// 卡片在画布里被「缩小至标题 / 块」时，`subpath` 一并带上 → 弹窗里也只出那一节。
+			await MarkdownRenderer.render(host.app, canvasEmbedText(node), contentEl, host.sourcePath, host.component);
 			return;
 		case 'link': {
 			const url = node.url ?? '';
