@@ -214,6 +214,9 @@
 }
 .mod-text-popup .modal-title {
 	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-light);
+	color: var(--text-faint);
 }
 
 .mod-text-popup .modal-content {
@@ -585,6 +588,8 @@
 	bottom: 0;
 	width: 100%;
 }
+
+.mod-text-popup .modal-content:has(.is-canvas) .text-popup-controls,
 
 .mod-text-popup .modal-content:has(.canvas-embed) .text-popup-controls,
 .mod-text-popup .modal-content:has(img) .text-popup-controls {
