@@ -1,2 +1,1 @@
-- add support for canvas and excalidraw
-- user can scroll mouse wheel to zoom in and zoom out
+- modify styles for popup window
