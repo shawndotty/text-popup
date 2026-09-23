@@ -1,1 +1,2 @@
-- optimize image showing style
+- add support for canvas and excalidraw
+- user can scroll mouse wheel to zoom in and zoom out
