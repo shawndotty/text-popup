@@ -287,6 +287,38 @@ export function resolveViewFrame(
 }
 
 /**
+ * 单帧的落位：把「这一帧需要的总位移」拆成滚动与平移两份。
+ *
+ * 推导：屏幕坐标 = 元素原点 − 滚动量 + 平移 + scale · 元素本地坐标（transform-origin 在 0 0）。
+ * 要让锚点在缩放前后停在同一处，`平移 − 滚动` 这一对必须恒等于 `carry − desired`，其中
+ * `desired = 当前滚动 + 缩放补偿`、`carry = 上一帧留下的平移`。移项后就是这里的入参
+ * `need = desired − carry`：**这一帧从「内容自然位」算起一共要挪多少**。
+ *
+ * 于是只有两种合法分法（与 `resolveViewFrame` 同源，那里是过渡版）：
+ *   ① 放得下（`0 ≤ need ≤ 该倍数下的可达上限`）→ 滚动全担、平移清零；
+ *   ② 放不下 → 滚动写 0（0 永远是合法值、不会再被夹），整段交给平移。
+ * 「滚动担一部分、平移补一部分」解不出来：平移会让内容块末端内缩、可滚区间跟着变小，
+ * 浏览器会把刚写进去的滚动量再夹一次（实测写 875 / 平移到 −200 后读到 674.8）。
+ *
+ * 为什么必须优先让**滚动**担：滚动是用户可以自己滚回来的量（滚到 0 就能看到内容左上角），
+ * 而平移一旦写进去，内容被推到滚动原点之外的那一段就再也滚不到了。所以只在滚动真的放不下时
+ * 才动用平移 —— 这是「缩放抖动」修复（`need` 的引入）要守住的那条边界。
+ *
+ * 与 `resolveViewFrame` 的分工：那里是过渡的中间帧，靠「写完再读回」问浏览器夹了多少，残留还要
+ * 按缓动进度收回；这里是单帧，上限由调用方先量好（`reachableScroll`）再传进来，一次定案。
+ */
+export function settleZoomFrame(
+	need: ScrollOffset,
+	limit: ScrollOffset,
+): { scroll: ScrollOffset; pan: ScrollOffset } {
+	const axis = (value: number, max: number) =>
+		value >= 0 && value <= max ? { scroll: value, pan: 0 } : { scroll: 0, pan: -value };
+	const x = axis(need.left, limit.left);
+	const y = axis(need.top, limit.top);
+	return { scroll: { left: x.scroll, top: y.scroll }, pan: { left: x.pan, top: y.pan } };
+}
+
+/**
  * 系统开了「减少动态效果」时不做过渡。动画纯属观感，用户显式关掉就该直接给结果；
  * 这条分支同时也是「瞬时跳变」这套旧行为的回归路径。
  */
@@ -331,7 +363,8 @@ export interface TextPopupSource {
  * - `Alt(Option)+Click` 以点击处为锚放大、并把它推到画布中心（再点还原），放大后按住空格可拖拽平移。
  *   放大 / 还原都走一段 500ms 的过渡（缓动 + 逐帧插值），不是瞬间跳变，见 animateViewZoom。
  * - `Ctrl` / `Command` + 滚轮（触控板双指缩放）以指针为锚缩放视图（1×~10×，瞬时、不带走过渡），
- *   算式照抄内置图片查看器的 handleWheelZoom，见 onWheel / zoomAtPoint。
+ *   算式照抄内置图片查看器的 handleWheelZoom，见 onWheel / zoomAtPoint。锚点补偿优先交给滚动
+ *   （用户能自己滚回来），只有滚动放不下时才动用平移，见 settleZoomFrame。
  * - 内容默认交给 MarkdownRenderer 渲染 HTML 与 Markdown，失败时回退纯文本。
  */
 export class TextPopupModal extends Modal {
@@ -845,17 +878,21 @@ export class TextPopupModal extends Modal {
 	 * 而不是 500ms 过渡（滚轮是连续手势，一条过渡会被下一次滚轮反复打断）、不先用 `clampScroll`
 	 * 夹终点（理由见下）。
 	 *
-	 * 五步的顺序一条都不能换（理由都在 animateViewZoom 的注释里，这里是同一条时间线的单帧版）：
-	 * ① 先写 scale、并把平移归零 —— 紧接着写滚动量时，浏览器才会按**新倍数**的上限去夹；
-	 * ② 写「让锚点不动」所需的滚动量；
-	 * ③ 把真正生效的值读回来（读回值本身就是「可达上限」的探针，不需要 reachableScroll）；
-	 * ④ 被夹掉的那一段交给平移：`resolveViewFrame(..., eased = 0)` —— eased 传 0 是**单帧版的关键**，
-	 *    它的含义是「上一段没收回的平移全额结转」（过渡版传的是缓动后的进度，收尾那一帧才会收回）；
-	 * ⑤ 再写一次滚动量与 transform（1× 时它自己会把平移清零、把 transform 摘掉）。
+	 * 落位只有两步（推导见 `settleZoomFrame`，这里是它的调用方）：
+	 * ① 先把「这一帧从内容自然位算起一共要挪多少」算出来 —— 总位移 `desired` 减去**上一格留下的
+	 *    平移**。那一截平移已经在屏幕上生效，这一格的补偿必须接在它后面；漏掉它内容就会按
+	 *    「漏掉的那一截」跳一下，连续滚轮时每格都跳，即肉眼看到的抖动（真机实测每格跳 43.8px，
+	 *    精确等于上一格的 pan，见 Plan-20260923-055530 §1.3）。
+	 * ② 按它放不放得进可达滚动区间二选一：放得下 → 滚动全担、平移清零；放不下 → 滚动写 0、
+	 *    整段交给平移。两个分支的屏幕落位相同，但只有前者是用户能自己滚回来的。
 	 *
-	 * 为什么不先用 clampScroll 把目标夹进 reachableScroll：那是给**过渡的终点**用的（终点不可达时
-	 * 收尾帧会把平移收不回来，见 clampScroll 的注释）。单帧版没有「收尾帧」，写进去的滚动量被夹多少、
-	 * 就由 ④ 全数交给平移，屏幕落位与目标完全一致。
+	 * 上限必须用 `reachableScroll(next)` 先量、而不是「写完滚动再读回」：读回值是在**平移归零**
+	 * 的状态下量出来的，而终态可能带着平移 —— 平移会缩小可滚区间，浏览器事后会把刚写的滚动再夹
+	 * 一次（实测判为「放得下」的 158.77，应用平移后被夹成 97.2 → 仍漂 61.5px，见该方案 §8-A）。
+	 * `reachableScroll` 同样以 `NO_PAN` 量，与分支①「平移清零」的终态是同一个数 —— 这一点必须对齐。
+	 *
+	 * 不先用 `clampScroll` 夹目标：那是给**过渡的终点**用的（终点不可达时收尾帧会把平移收不回来，
+	 * 见 clampScroll 的注释）。单帧版没有「收尾帧」，写进去的滚动放不下就整段交给平移，落位一致。
 	 */
 	private zoomAtPoint(clientX: number, clientY: number, next: number): void {
 		const current = this.viewZoom;
@@ -864,19 +901,16 @@ export class TextPopupModal extends Modal {
 		const point = rect ? elementPoint(clientX, clientY, rect, current) : { x: 0, y: 0 };
 		const delta = zoomScrollDelta(current, next, point);
 		const desired = { left: from.left + delta.left, top: from.top + delta.top };
-
-		this.applyViewTransform(next, NO_PAN);
-		this.scrollEl.scrollLeft = desired.left;
-		this.scrollEl.scrollTop = desired.top;
-		const settled = resolveViewFrame(
-			desired,
-			{ left: this.scrollEl.scrollLeft, top: this.scrollEl.scrollTop },
-			this.viewPan,
-			0,
+		// 上一格留下的平移必须先取：它已经在屏幕上生效，这一格的补偿要接在它后面。
+		// 丢了它内容就会按「丢掉的那一截」跳一下 —— 连续滚轮时每格都跳，即肉眼看到的抖动。
+		const carry = this.viewPan;
+		const settled = settleZoomFrame(
+			{ left: desired.left - carry.left, top: desired.top - carry.top },
+			this.reachableScroll(next),
 		);
+		this.applyViewTransform(next, settled.pan);
 		this.scrollEl.scrollLeft = settled.scroll.left;
 		this.scrollEl.scrollTop = settled.scroll.top;
-		this.applyViewTransform(next, settled.pan);
 	}
 
 	/**

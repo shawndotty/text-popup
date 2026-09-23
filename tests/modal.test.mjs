@@ -40,6 +40,12 @@
  * （`-deltaY/150`、`deltaMode` 折算 40/800、macOS 非整数 deltaY 翻倍、`clamp(z, 1, 10)`）。
  * 这里钉住四档读数（含 deltaY = 0）；「锚点是否真的不漂移」取决于真实布局与滚动夹取，
  * 只能真机 eval 量（基线见该方案 §3.3：误差 ≤ 0.2px）。
+ *
+ * ⑦ `settleZoomFrame` —— V119 跟进「滚轮缩放时文字 / Excalidraw / Canvas 会抖，图片却不抖」
+ * （2026-09-23，方案 [[Plan-20260923-055530]]）。同一条锚点补偿在单帧版里漏了「上一格留下的平移」，
+ * 每格跳一次、跳的距离精确等于上一格的 pan —— 只在「内容放大后仍装得下」的轴上现形，图片因为
+ * 恰好铺满一屏、补偿全由滚动承担，所以观感上不抖。这里钉住「放得下 → 滚动全担 / 放不下 → 滚动写 0、
+ * 整段交给平移」这两个分支，以及两分支的落位必须一致；「判据 `q` 逐格恒定」只能真机量。
  */
 
 import assert from 'node:assert/strict';
@@ -58,6 +64,7 @@ const {
 	headingColorVariables,
 	resolveViewFrame,
 	scrollToMove,
+	settleZoomFrame,
 	viewportCenter,
 	wheelZoomTarget,
 	zoomScrollDelta,
@@ -546,4 +553,127 @@ test('滚轮缩放：步长、macOS 非整数翻倍、上下限、deltaMode 折�
 
 	// 某些设备会派 deltaY = 0 的 wheel（横向滚动），不能让它把倍数推走
 	assert.equal(wheelZoomTarget(1.6, 0, 0, false), 1.6);
+});
+
+test('settleZoomFrame：放得下时滚动全担、平移清零（平移是用户滚不回来的量，能不用就不用）', () => {
+	const frame = settleZoomFrame({ left: 300, top: 0 }, { left: 875, top: 519 });
+	assert.deepEqual(frame.scroll, { left: 300, top: 0 }, '放得下就整段写成滚动量');
+	assert.deepEqual(frame.pan, NO_PAN, '滚动担得下时不该动用平移');
+	// 边界（`need` 正好等于上限）仍走滚动分支：两种分支的屏幕落位相同，但只有滚动是能回滚的
+	const edge = settleZoomFrame({ left: 875, top: 519 }, { left: 875, top: 519 });
+	assert.deepEqual(edge.scroll, { left: 875, top: 519 }, 'need == limit 时仍算放得下');
+	assert.deepEqual(edge.pan, NO_PAN, '边界上也不该动用平移');
+});
+
+test('settleZoomFrame：放不下 / 需要反向位移时滚动写 0、整段交给平移', () => {
+	// 真机实测（Plan-20260920-161511 §2.2）：点击落在画布左侧要 1191，而 2× 的上限只有 875
+	const over = settleZoomFrame({ left: 1191, top: 0 }, { left: 875, top: 0 });
+	assert.deepEqual(over.scroll, NO_PAN, '放不下时滚动写 0 —— 写进去也会被再夹一次');
+	assert.deepEqual(over.pan, { left: -1191, top: 0 }, '整段由平移顶上，屏幕落位不变');
+	// 缩小时 need 会变负：内容比画布小、缩放把锚点往回拉，负的滚动写不进去，只能靠平移
+	const backwards = settleZoomFrame({ left: -183.76, top: 0 }, { left: 0, top: 0 });
+	assert.deepEqual(backwards.scroll, NO_PAN, '反向位移同样只能交给平移');
+	assert.equal(backwards.pan.left, 183.76, '平移取反：屏幕坐标 = 原点 − 滚动 + 平移');
+});
+
+test('settleZoomFrame：两种分支的落位必须一致（pan − scroll 恒等于 −need）', () => {
+	const limit = { left: 875, top: 519 };
+	for (const value of [-183.76, 0, 37.86, 875, 1191]) {
+		const { scroll, pan } = settleZoomFrame({ left: value, top: value }, limit);
+		// 恒等式写成「差再补回去等于 0」：`need = 0` 时 `-0` 与 `0` 的严格相等会白白失败
+		assert.ok(
+			Math.abs(pan.left - scroll.left + value) < 1e-9,
+			`need=${value} 时横向落位偏了 ${pan.left - scroll.left + value}px`,
+		);
+		assert.ok(
+			Math.abs(pan.top - scroll.top + value) < 1e-9,
+			`need=${value} 时纵向落位偏了 ${pan.top - scroll.top + value}px`,
+		);
+	}
+});
+
+test('滚轮缩放：连续多格后锚点仍钉在原处（漏掉 carry 则每格跳一次）', () => {
+	// 与真机同一组几何（Plan-20260923-055530 §1.3 文字那一条）：内容块 1353.5 × 96，纵向居中在
+	// 833 高的画布里（上下各留 304 空白），指针固定在 P = (740, 416)。纵向「放大后仍装得下」
+	// → 补偿只能靠平移 → 正是会抖的那条轴；横向内容本来就比画布宽，全程走滚动分支。
+	const origin = { x: 63.99, y: 368.67 };
+	const extent = { x: 1353.5, y: 96 };
+	const viewport = { x: 1481, y: 833 };
+	const pointer = { x: 740, y: 416 };
+	/** 可滚区间 = 内容块超出画布的那部分（居中那半边的空白不算，见 reachableScroll）。 */
+	const limit = (scale) => ({
+		left: Math.max(0, origin.x + extent.x * scale - viewport.x),
+		top: Math.max(0, origin.y + extent.y * scale - viewport.y),
+	});
+	/** 浏览器只认 [0, limit] 里的滚动量，写进去的值会被同步夹一次。 */
+	const accept = (value, axis, scale) => Math.min(Math.max(value, 0), limit(scale)[axis]);
+	/** 缩放层原点在屏幕上的位置：布局原点 − 滚动 + 平移。 */
+	const rectOf = (scroll, pan) => ({
+		left: origin.x - scroll.left + pan.left,
+		top: origin.y - scroll.top + pan.top,
+	});
+	/** 指针下压着的「内容局部坐标」：它恒定 = 没抖，它变了 = 内容在屏幕上平移了 Δq × scale。 */
+	const anchor = (scale, scroll, pan) => {
+		const rect = rectOf(scroll, pan);
+		return { x: (pointer.x - rect.left) / scale, y: (pointer.y - rect.top) / scale };
+	};
+
+	/** 一格滚轮：照 zoomAtPoint 的顺序算出补偿并落位，返回新状态。 */
+	const step = (state, settle) => {
+		const current = state.scale;
+		const point = elementPoint(pointer.x, pointer.y, rectOf(state.scroll, state.pan), current);
+		const next = wheelZoomTarget(current, -120, 0, false);
+		const delta = zoomScrollDelta(current, next, point);
+		const desired = { left: state.scroll.left + delta.left, top: state.scroll.top + delta.top };
+		const frame = settle(desired, state.pan, next);
+		return {
+			scale: next,
+			scroll: {
+				left: accept(frame.scroll.left, 'left', next),
+				top: accept(frame.scroll.top, 'top', next),
+			},
+			pan: frame.pan,
+		};
+	};
+	/** 走 6 格，返回逐格的锚点局部坐标。 */
+	const run = (settle) => {
+		const series = [];
+		let state = { scale: 1, scroll: { left: 0, top: 0 }, pan: { left: 0, top: 0 } };
+		for (let i = 0; i <= 6; i++) {
+			series.push({ scale: state.scale, ...anchor(state.scale, state.scroll, state.pan) });
+			if (i < 6) state = step(state, settle);
+		}
+		return series;
+	};
+
+	// 修好后：上一格留下的平移先从总位移里扣掉，再按可达上限二选一
+	const fixed = (desired, carry, next) =>
+		settleZoomFrame({ left: desired.left - carry.left, top: desired.top - carry.top }, limit(next));
+	// 修复前：落位前先把平移归零，`carry` 于是恒为 0，只有被夹掉的那一段才交给平移
+	const broken = (desired, _carry, next) => {
+		const accepted = { left: accept(desired.left, 'left', next), top: accept(desired.top, 'top', next) };
+		return resolveViewFrame(desired, accepted, NO_PAN, 0);
+	};
+
+	const after = run(fixed);
+	for (const frame of after) {
+		assert.ok(
+			Math.abs(frame.y - after[0].y) < 0.2,
+			`修好后纵向锚点不该动：${after[0].scale}× 时 q=${after[0].y}，${frame.scale}× 时成了 ${frame.y}`,
+		);
+		assert.ok(
+			Math.abs(frame.x - after[0].x) < 0.2,
+			`修好后横向锚点不该动：${after[0].scale}× 时 q=${after[0].x}，${frame.scale}× 时成了 ${frame.x}`,
+		);
+	}
+
+	// 漏掉 carry 时：每格跳一次，跳的距离精确等于上一格的平移 —— 就是用户看到的抖动
+	const before = run(broken);
+	const drift = Math.max(
+		...before.map((frame) => Math.abs(frame.y - before[0].y) * frame.scale),
+	);
+	assert.ok(
+		drift > 20,
+		`漏掉 carry 时纵向应当明显可见地跳（实测最大 ${drift.toFixed(1)}px），否则这条用例失去了意义`,
+	);
 });
