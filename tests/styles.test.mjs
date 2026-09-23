@@ -1,6 +1,7 @@
 /**
  * 弹窗样式回归用例 —— 目前钉住六条：表格字号（V109 修复，2026-09-18）、视图缩放的 transform
- * （V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20）、
+ * 与绘制边界（V116 第四次反馈「Zoom out 抖动」＋第五次反馈「Zoom in 抖动」的修复，2026-09-20；
+ * contain: paint 是 V119 第十三条「缩回 1× 底部残留白线」的修复，2026-09-23）、
  * 表格放大图标的悬停显隐（V117，2026-09-21）、弹窗图片的尺寸口径（V118，2026-09-21）、
  * Canvas 嵌入的放大图标（V119，2026-09-22）与弹窗里的画布尺寸（V119，2026-09-22）。
  *
@@ -82,6 +83,11 @@ test('单元格字号覆盖必须限定在弹窗内，不能影响编辑器与�
  *   ① 删掉 translate 会让缩放的抖动静默回来（真机实测 Zoom out 横向甩回 101px、Zoom in 反向漂出
  *      155px，Report-20260920-202610 / Report-20260920-223435）；
  *   ② transform 从右往左作用，写成 `scale() translate()` 时平移量会被 scale 放大，补偿的数值全错。
+ *
+ * 第三条（V119 白线残留）是 `contain: paint`：放大是 paint-time transform，正文的**布局盒**始终是
+ * 1× 的尺寸，而内容实际画到 10× ≈ 4000×4200；丢了这行，Chromium 会按布局盒算失效范围，缩回 1× 时
+ * 放大期间画到盒外的那条白边拿不到重画通知、留在屏幕上（真机：Excalidraw 嵌入 6 次放大 + 8 次缩小
+ * 后底部留一条 1174px 的纯白线，Plan-20260923-112826）。
  */
 test('视图缩放的 transform 同时挂 scale 与平移补偿，且 translate 在 scale 左边', () => {
 	const rule = RULES.find(
@@ -110,6 +116,11 @@ test('视图缩放的 transform 同时挂 scale 与平移补偿，且 translate 
 	assert.ok(
 		/transform-origin\s*:\s*0\s+0/.test(rule.body),
 		'transform-origin 必须留在 0 0（点击处左上方的内容要能滚回来，见 styles.css 的注释）',
+	);
+	assert.ok(
+		/contain\s*:\s*paint/.test(rule.body),
+		'视图缩放的规则缺少 `contain: paint`：放大时 Chromium 按布局盒算失效范围，' +
+			'画到盒外的像素缩回 1× 时会残留成一条白线（Plan-20260923-112826）',
 	);
 });
 
