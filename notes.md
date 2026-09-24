@@ -1,1 +1,1 @@
-- modify styles for popup window
+- add mobile swipe navitation support
