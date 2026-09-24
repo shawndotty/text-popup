@@ -642,3 +642,49 @@
 .mod-text-popup .text-popup-text .external-link {
 	text-decoration: none;
 }
+
+/* ==========================================================================
+   移动端优化
+   ========================================================================== */
+
+/* 桌面端弹窗铺满整个 Obsidian 应用窗口，内边距 64px 在桌面大屏上是合理的留白；
+   手机屏幕宽度通常 375~430px，64px 内边距吃掉三分之一宽度，让 callout / 代码块 / 表格
+   在剩余的窄列里被挤得很死。这里用 @media 收紧内边距与控制条，让内容横向占满更多屏幕，
+   桌面端原样不动。
+
+   断点取 600px：与上面 .is-rich:has(...) 那条 `min-width: min(640px, 100%)` 的「窄窗口
+   退化」阈值相邻 —— 600~640px 之间仍按桌面端 64px 内边距显示（窗口够宽），≤600px 才收紧，
+   两个阈值不会相互打架。 */
+
+@media (max-width: 600px) {
+	/* 内容区内边距：64px → 16px。
+	   这是手机上「callout 看着窄」的根本原因 —— callout 已经是 width: 100%，
+	   但它的 100% 是相对 .text-popup-content 的内容盒（= 视口 − 2×64px）算的；
+	   把内边距收到 16px 后 callout 的实际宽度从 ~247px 变成 ~343px（375px 视口下）。 */
+	.mod-text-popup .text-popup-content {
+		padding: var(--size-4-4);
+	}
+
+	/* 标题栏：右内边距 48px 是给关闭按钮预留的位置，手机上按钮区窄一些收到 32px；
+	   上下内边距也从 12px 收到 8px，让标题栏更紧凑。 */
+	.mod-text-popup .modal-header {
+		padding: var(--size-4-2) var(--size-4-3);
+		padding-inline-end: var(--size-4-8);
+	}
+
+	/* 底部控制条：缩小内边距与 gap，给内容区多腾一点纵向空间。 */
+	.mod-text-popup .text-popup-controls {
+		gap: var(--size-4-2);
+		padding: var(--size-4-1) var(--size-4-3);
+	}
+
+	/* Callout 内边距：6px 12px → 4px 8px，配合内容区内边距收紧让 callout 内容更紧凑。 */
+	.mod-text-popup .text-popup-text.is-rich .callout {
+		padding: 4px 8px;
+	}
+
+	/* Canvas 节点内容内边距：手机上压缩，让节点里的文字占更多节点空间。 */
+	.mod-text-popup .text-popup-canvas-node-content {
+		padding: var(--size-4-1) var(--size-4-2);
+	}
+}
