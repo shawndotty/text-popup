@@ -1,1 +1,1 @@
-- add mobile swipe navitation support
+- optimize mobile style
