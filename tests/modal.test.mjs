@@ -65,6 +65,7 @@ const {
 	resolveViewFrame,
 	scrollToMove,
 	settleZoomFrame,
+	swipeDirection,
 	viewportCenter,
 	wheelZoomTarget,
 	zoomScrollDelta,
@@ -676,4 +677,56 @@ test('滚轮缩放：连续多格后锚点仍钉在原处（漏掉 carry 则每�
 		drift > 20,
 		`漏掉 carry 时纵向应当明显可见地跳（实测最大 ${drift.toFixed(1)}px），否则这条用例失去了意义`,
 	);
+});
+
+test('swipeDirection：距离不足不触发（与点击 / 轻微抖动拉开）', () => {
+	// 49px —— 刚好不到 50px 阈值
+	const start = { x: 100, y: 200, scrollLeft: 0, maxScroll: 0 };
+	assert.equal(swipeDirection(start, { x: 149, y: 200 }), 0, '横向 49px 不该触发');
+	assert.equal(swipeDirection(start, { x: 51, y: 200 }), 0, '横向 49px（往左滑）也不该触发');
+});
+
+test('swipeDirection：纵向 / 斜向滑动不触发（不抢原生滚动）', () => {
+	const start = { x: 100, y: 200, scrollLeft: 0, maxScroll: 0 };
+	// 纵向滑动：dx=0, dy=200 → 不触发
+	assert.equal(swipeDirection(start, { x: 100, y: 400 }), 0, '纯纵向不触发');
+	// 斜向：dx=60, dy=40 → |dx| < 2·|dy|（60 < 80），不触发
+	assert.equal(swipeDirection(start, { x: 160, y: 240 }), 0, '横向占优不足 2 倍时不触发');
+	// 刚好到 2 倍：dx=80, dy=40 → 80 = 2·40，判据用 < 不用 ≤，应当触发
+	assert.equal(swipeDirection(start, { x: 180, y: 240 }), -1, '横向占优正好 2 倍时触发');
+});
+
+test('swipeDirection：右滑 = 上一条（-1），左滑 = 下一条（+1）', () => {
+	// 无横向可滚区间时（内容比画布窄，最常见的情形）
+	const noScroll = { x: 100, y: 200, scrollLeft: 0, maxScroll: 0 };
+	assert.equal(swipeDirection(noScroll, { x: 200, y: 200 }), -1, '右滑 → 上一条');
+	assert.equal(swipeDirection(noScroll, { x: 0, y: 200 }), 1, '左滑 → 下一条');
+	// 大幅度滑动也只返回方向，不带幅度
+	assert.equal(swipeDirection(noScroll, { x: 500, y: 200 }), -1, '大幅度右滑仍是 -1');
+});
+
+test('swipeDirection：有横向可滚区间时只在边界触发（不抢放大后的横向平移）', () => {
+	// 放大后内容比画布宽：maxScroll = 500
+	// ① 在左边界（scrollLeft=0）右滑 → 触发（想看上一条）
+	const atLeft = { x: 100, y: 200, scrollLeft: 0, maxScroll: 500 };
+	assert.equal(swipeDirection(atLeft, { x: 200, y: 200 }), -1, '左边界右滑 → 上一条');
+	// ② 在左边界左滑 → 不触发（想继续往右滚看内容）
+	assert.equal(swipeDirection(atLeft, { x: 0, y: 200 }), 0, '左边界左滑 → 不触发（让浏览器横向滚动）');
+	// ③ 在右边界（scrollLeft=500）左滑 → 触发（想看下一条）
+	const atRight = { x: 100, y: 200, scrollLeft: 500, maxScroll: 500 };
+	assert.equal(swipeDirection(atRight, { x: 0, y: 200 }), 1, '右边界左滑 → 下一条');
+	// ④ 在右边界右滑 → 不触发（想继续往左滚看内容）
+	assert.equal(swipeDirection(atRight, { x: 200, y: 200 }), 0, '右边界右滑 → 不触发');
+	// ⑤ 在中间 → 两个方向都不触发（让用户先滚到边界）
+	const mid = { x: 100, y: 200, scrollLeft: 250, maxScroll: 500 };
+	assert.equal(swipeDirection(mid, { x: 200, y: 200 }), 0, '中间右滑 → 不触发');
+	assert.equal(swipeDirection(mid, { x: 0, y: 200 }), 0, '中间左滑 → 不触发');
+});
+
+test('swipeDirection：maxScroll = 0 时（内容比画布窄）不受边界约束', () => {
+	// 这是移动端最常见的情形：默认 1× 下文字 / 图片不比画布宽
+	const start = { x: 100, y: 200, scrollLeft: 0, maxScroll: 0 };
+	// 两个方向都该触发（scrollLeft 本来就是 0，但 maxScroll = 0 意味着没有可滚区间，不查边界）
+	assert.equal(swipeDirection(start, { x: 200, y: 200 }), -1);
+	assert.equal(swipeDirection(start, { x: 0, y: 200 }), 1);
 });

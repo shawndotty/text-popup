@@ -319,6 +319,44 @@ export function settleZoomFrame(
 }
 
 /**
+ * 移动端左右滑动切换条目的判据。
+ *
+ * 抽成纯函数是为了能被 `tests/modal.test.mjs` 直接喂假值钉住 —— 与本文件其它
+ * 几何 / 判据函数（clickZoomTarget、wheelZoomTarget…）同一条理由：没有能跑
+ * 真实手势的 DOM 环境，只能把判据本身钉住，真机 eval 验收落点。
+ *
+ * 返回 -1 = 切到上一条（手指往右滑，与 ArrowLeft 同义）、
+ * +1 = 切到下一条（手指往左滑，与 ArrowRight 同义）、0 = 不触发。
+ *
+ * 三道判据：
+ * - 距离 ≥ 50px：太短会与点击 / 轻微抖动误触。移动端浏览器自身的滑动手势阈值
+ *   通常在 10~30px，50px 比它高一档才能压住误触。
+ * - 横向占优比 ≥ 2（|dx| ≥ 2·|dy|）：内容区纵向滚动是常态，比例太低会把
+ *   斜向滑动也吞掉；2 这条线能让「明显横向」与「明显纵向 / 斜向」分开。
+ * - 横向有可滚区间时只在边界触发：放大后内容比画布宽时用户可以横向滚动浏览，
+ *   不能在中途抢手势；只有滚到起点（左边界）再往右滑、或滚到终点（右边界）再
+ *   往左滑才算「想切条目」。无横向滚动区间时（= 内容比画布窄）不受此约束。
+ */
+const SWIPE_DISTANCE_THRESHOLD = 50;
+const SWIPE_AXIS_RATIO = 2;
+
+export function swipeDirection(
+	start: { x: number; y: number; scrollLeft: number; maxScroll: number },
+	end: { x: number; y: number },
+): number {
+	const dx = end.x - start.x;
+	const dy = end.y - start.y;
+	if (Math.abs(dx) < SWIPE_DISTANCE_THRESHOLD) return 0;
+	if (Math.abs(dx) < SWIPE_AXIS_RATIO * Math.abs(dy)) return 0;
+	// 有横向可滚区间时只在边界触发（避免抢走放大后的横向平移）
+	if (start.maxScroll > 0) {
+		if (dx > 0 && start.scrollLeft > 0) return 0; // 右滑但不在左边界
+		if (dx < 0 && start.scrollLeft < start.maxScroll) return 0; // 左滑但不在右边界
+	}
+	return dx > 0 ? -1 : 1;
+}
+
+/**
  * 系统开了「减少动态效果」时不做过渡。动画纯属观感，用户显式关掉就该直接给结果；
  * 这条分支同时也是「瞬时跳变」这套旧行为的回归路径。
  */
@@ -427,6 +465,18 @@ export class TextPopupModal extends Modal {
 		y: number;
 		left: number;
 		top: number;
+	} | null = null;
+	/**
+	 * 移动端滑动手势的起点（含当时的横向滚动位置与可达上限）；null = 没在追踪。
+	 *
+	 * 只记 touchstart 那一刻的 scrollLeft / maxScroll：touchmove 期间浏览器自己会
+	 * 横向滚动（放大后内容比画布宽时），用结束时刻的值会误判「已在边界」。
+	 */
+	private touchStart: {
+		x: number;
+		y: number;
+		scrollLeft: number;
+		maxScroll: number;
 	} | null = null;
 
 	constructor(
@@ -545,6 +595,41 @@ export class TextPopupModal extends Modal {
 		this.endPan();
 	};
 
+	/**
+	 * 移动端 touchstart：记录起点与当时的横向滚动状态。
+	 *
+	 * 只认单指（多指 = 双指缩放之类，不参与滑动切换）。passive: true 不阻止
+	 * 浏览器的原生滚动 —— 切换的判据全在 touchend 上，touchmove 期间让
+	 * 浏览器自己滚，不打断原生手感。
+	 */
+	private onTouchStart = (evt: TouchEvent): void => {
+		if (evt.touches.length !== 1) return;
+		const touch = evt.touches[0];
+		if (!touch) return;
+		this.touchStart = {
+			x: touch.clientX,
+			y: touch.clientY,
+			scrollLeft: this.scrollEl.scrollLeft,
+			maxScroll: this.scrollEl.scrollWidth - this.scrollEl.clientWidth,
+		};
+	};
+
+	/**
+	 * 移动端 touchend：按 swipeDirection 的判据决定切不切换、往哪边切。
+	 *
+	 * 不 preventDefault：touchend 时手势已经结束，浏览器没有默认动作要压。
+	 * direction = 0 时什么都不做（短触、纵向滚动、斜向滑动都不触发切换）。
+	 */
+	private onTouchEnd = (evt: TouchEvent): void => {
+		const start = this.touchStart;
+		if (!start) return;
+		this.touchStart = null;
+		const touch = evt.changedTouches[0];
+		if (!touch) return;
+		const direction = swipeDirection(start, { x: touch.clientX, y: touch.clientY });
+		if (direction !== 0) this.step(direction);
+	};
+
 	onOpen(): void {
 		this.modalEl.addClass('mod-text-popup');
 		this.updateTitle();
@@ -596,6 +681,15 @@ export class TextPopupModal extends Modal {
 		activeDocument.addEventListener('keyup', this.onKeyUp);
 		activeWindow.addEventListener('blur', this.onWindowBlur);
 
+		// 移动端：左右滑动切换条目（与方向键同义）。判据见 swipeDirection。
+		// 只在移动端注册：桌面端有方向键，touch 事件在无触屏的桌面也永不触发，
+		// 但按平台分支注册与本文件其它 Platform.isMobile 分支（quote.ts / scanner）同源。
+		if (Platform.isMobile) {
+			// passive: true —— 不阻止原生滚动，touchmove 期间让浏览器自己滚
+			this.scrollEl.addEventListener('touchstart', this.onTouchStart, { passive: true });
+			this.scrollEl.addEventListener('touchend', this.onTouchEnd, { passive: true });
+		}
+
 		this.buildControls(this.contentEl);
 		this.updateSize();
 
@@ -617,6 +711,9 @@ export class TextPopupModal extends Modal {
 		activeDocument.removeEventListener('keydown', this.onKeyDown, true);
 		activeDocument.removeEventListener('keyup', this.onKeyUp);
 		activeWindow.removeEventListener('blur', this.onWindowBlur);
+		// 移动端滑动监听随弹窗关闭解绑。removeEventListener 不关心 passive，对未注册的监听调用也安全
+		this.scrollEl.removeEventListener('touchstart', this.onTouchStart);
+		this.scrollEl.removeEventListener('touchend', this.onTouchEnd);
 		// 平移待命的皮肤（is-pan-ready / is-panning）也要清掉，别留在节点上
 		this.endPanReady();
 		// 过渡帧比弹窗活得长的话，下一帧会去写已经拆掉的 DOM
