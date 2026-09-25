@@ -1,5 +1,6 @@
 import type { App, TFile } from 'obsidian';
 import { WIKI_EMBED } from './blocks';
+import type { TextBlockRegion } from './blocks';
 import { matchTable } from './convert/forward-table';
 
 /**
@@ -227,6 +228,34 @@ export function extractTableBody(raw: string): string {
 		return '';
 	}
 	return lines.join('\n');
+}
+
+/**
+ * 七类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。
+ *
+ * 放在这里而不是 scanner 里：它是**纯字符串**处理（不碰 App / DOM），而 V123 的过滤层
+ *（`filter.ts`，只吃 `TextBlockRegion`）要复用它算搜索文本 —— 放 scanner 会让过滤层反向依赖
+ * 弹窗与画布那一整条链，单测就没法只喂假值了。
+ */
+export function readTextBody(region: TextBlockRegion): string {
+	switch (region.kind) {
+		case 'code':
+			return extractFencedBody(region.raw);
+		case 'callout':
+			return extractCalloutBody(region.raw);
+		case 'math':
+			return extractMathBody(region.raw);
+		case 'image':
+			return extractImageBody(region.raw);
+		case 'quote':
+			return extractQuoteBody(region.raw);
+		case 'table':
+			return extractTableBody(region.raw);
+		case 'canvas':
+			return extractCanvasBody(region.raw);
+		default:
+			return '';
+	}
 }
 
 /** 去首尾空行 + 按最小缩进整体左移（只左移，不吞内容）。 */

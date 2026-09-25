@@ -23,8 +23,8 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { Platform } from 'obsidian';
 import { scanTextBlocks } from '../blocks';
 import type { TextBlockRegion } from '../blocks';
+import { readTextBody } from '../extract';
 import { createActionEl } from './inject';
-import { readTextBody } from './session';
 import { isKindEnabled, QUOTE_LINE_SELECTOR } from './shared';
 import type { TextPopupHost } from './shared';
 

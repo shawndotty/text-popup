@@ -96,6 +96,11 @@ export default {
 	Reset: 'Reset',
 	'Magnified view': 'Magnified view',
 
+	// —— 弹窗过滤模式 ——
+	'Filter blocks': 'Filter blocks',
+	'Type to filter, @ for type': 'Type to filter, @ for type',
+	Filtered: 'Filtered',
+
 	// —— 放大图标的 aria-label ——
 	'Magnify': 'Magnify',
 };

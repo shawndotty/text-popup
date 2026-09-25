@@ -8,20 +8,20 @@ import { scanTextBlocks } from '../blocks';
 import type { TextBlockRegion } from '../blocks';
 import { parseCanvasDocument, renderCanvasSnapshot } from '../canvas';
 import type { CanvasDocument } from '../canvas';
+// 七类的纯文本回退已迁到 `extract.ts`（`readTextBody`）：过滤层要用它算搜索文本，
+// 留在 scanner 里会让 `filter.ts` 反向依赖弹窗 / 画布那一整条链。
 import {
-	extractCalloutBody,
 	extractCanvasBody,
-	extractFencedBody,
 	extractImageBody,
-	extractMathBody,
-	extractQuoteBody,
 	extractRichSource,
-	extractTableBody,
 	extractText,
 	isExcalidrawEmbed,
+	readTextBody,
 	resolveCanvasFile,
 	resolveExcalidrawImage,
 } from '../extract';
+import { entrySearchText, entryTypeOf } from '../filter';
+import type { PopupEntry } from '../filter';
 import { TextPopupModal } from '../modal';
 import type { TextPopupBody, TextPopupSource } from '../modal';
 import { findSupportedElement } from '../tags';
@@ -171,11 +171,17 @@ function buildPopupSession(
 	const measure = (): HTMLElement => (measureEl ??= createOffscreenHost(getDoc()));
 
 	const candidates: PopupCandidate[] = [];
+	const entries: PopupEntry[] = [];
 	const sourcePath = file?.path ?? '';
 	for (const region of editor ? scanTextBlocks(editor.getValue()) : []) {
 		if (!isKindEnabled(host.settings, region.kind)) continue;
 		const candidate = createCandidate(region, host, measure, sourcePath);
-		if (candidate) candidates.push(candidate);
+		if (!candidate) continue;
+		candidates.push(candidate);
+		// 过滤元信息（V123）：类型 + 可搜索文本，与候选**同一个循环**里算，长度恒等于 size。
+		// 两个数组必须同源：过滤筛的是「全集下标」，短一个就会错位到别的条目上。
+		const type = entryTypeOf(candidate.region);
+		entries.push({ type, text: entrySearchText(candidate.region, type) });
 	}
 
 	return {
@@ -191,6 +197,8 @@ function buildPopupSession(
 			read(index: number): TextPopupBody | null {
 				return candidates[index]?.read() ?? null;
 			},
+			// 过滤用：每条候选的类型与可搜索文本；长度恒等于 size（缺了就按「不可过滤」处理）。
+			entries,
 			dispose(): void {
 				measureEl?.remove();
 			},
@@ -297,24 +305,3 @@ function createCandidate(
 	};
 }
 
-/** 七类非 HTML 区块的纯文本回退（关闭「渲染 HTML 与 Markdown」时显示的就是它）。 */
-export function readTextBody(region: TextBlockRegion): string {
-	switch (region.kind) {
-		case 'code':
-			return extractFencedBody(region.raw);
-		case 'callout':
-			return extractCalloutBody(region.raw);
-		case 'math':
-			return extractMathBody(region.raw);
-		case 'image':
-			return extractImageBody(region.raw);
-		case 'quote':
-			return extractQuoteBody(region.raw);
-		case 'table':
-			return extractTableBody(region.raw);
-		case 'canvas':
-			return extractCanvasBody(region.raw);
-		default:
-			return '';
-	}
-}

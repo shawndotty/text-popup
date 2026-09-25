@@ -95,6 +95,11 @@ const zhTW: Partial<typeof en> = {
 	Reset: '還原預設值',
 	'Magnified view': '放大顯示',
 
+	// —— 弹窗过滤模式 ——
+	'Filter blocks': '過濾區塊',
+	'Type to filter, @ for type': '輸入內容過濾，@ 按類型',
+	Filtered: '已篩選',
+
 	// —— 放大圖示的 aria-label ——
 	'Magnify': '放大顯示',
 };

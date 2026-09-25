@@ -1,4 +1,13 @@
 import { App, Component, MarkdownRenderer, Modal, Platform, setIcon } from 'obsidian';
+import {
+	availableTypes,
+	formatPopupTitle,
+	matchEntries,
+	parseFilterInput,
+	suggestTypes,
+	suggestionContext,
+} from './filter';
+import type { PopupEntry, PopupEntryType } from './filter';
 import { t } from './lang/helpers';
 import {
 	FONT_SIZE_MAX,
@@ -394,6 +403,13 @@ export interface TextPopupSource {
 	readonly sourcePath: string;
 	/** 惰性提取第 index 条的内容；越界或提取为空时返回 null。 */
 	read(index: number): TextPopupBody | null;
+	/**
+	 * 过滤用元信息：每条候选的类型与可搜索文本，长度恒等于 `size`（V123）。
+	 *
+	 * **可选**：缺省（或长度与 `size` 对不上）时弹窗按「不可过滤」处理 —— 不注册 `/`，
+	 * 计数与导航完全保持今天的行为。这样测试桩与自造 source 一行都不用改。
+	 */
+	entries?: readonly PopupEntry[];
 	/** 会话结束时的清理（例如移除离屏宿主）；实现方可选。 */
 	dispose?(): void;
 }
@@ -479,6 +495,21 @@ export class TextPopupModal extends Modal {
 		maxScroll: number;
 	} | null = null;
 
+	// —— 过滤模式（V123，方案 [[Plan-20260925-072735]]）——
+	/** 过滤框是否展开。它是唯一的**可视**状态，其余（`matches` / 计数 / 导航范围）都是派生量。 */
+	private filterOpen = false;
+	/** 输入框原文；关框后仍保留 —— 这就是卡片要的「退出过滤后条件保留」。 */
+	private filterValue = '';
+	/** 命中项在**全集**里的下标；空数组 = 没有过滤（导航与计数都按全量走）。 */
+	private matches: number[] = [];
+	/** 进入过滤态那一刻的 index：零命中时退回它（卡片 A6）。 */
+	private filterAnchor = 0;
+	private filterInputEl: HTMLInputElement | null = null;
+	private suggestEl: HTMLElement | null = null;
+	private suggestItems: PopupEntryType[] = [];
+	/** 高亮项下标；-1 = 没有高亮（列表为空时）。 */
+	private suggestIndex = -1;
+
 	constructor(
 		app: App,
 		private source: TextPopupSource,
@@ -538,6 +569,8 @@ export class TextPopupModal extends Modal {
 	 * capture 阶段先手 + stopPropagation，按钮再也看不到空格；`repeat` 必须一并吞掉。
 	 */
 	private onKeyDown = (evt: KeyboardEvent): void => {
+		// 过滤态下空格是**输入空格**，不是平移待命（Plan §6 矩阵，真机 K7）
+		if (this.filterOpen) return;
 		if (evt.key !== ' ' || evt.defaultPrevented) return;
 		// 只收自己弹窗里的空格：弹窗开着时用户又开了别的 Modal（快速切换、命令面板…），
 		// 那里面的输入框要能正常打空格。
@@ -648,8 +681,21 @@ export class TextPopupModal extends Modal {
 
 		// 方向键交给 Modal 自带的 scope：核心在 open() 里已把它压进键盘栈，关闭时自动弹出。
 		// modifiers 传 null = 不限修饰键，与内置图片 lightbox 的行为一致。
-		this.scope.register(null, 'ArrowLeft', () => this.step(-1));
-		this.scope.register(null, 'ArrowRight', () => this.step(1));
+		// 过滤态下 ← → 要归光标（输入框里移动光标），所以这里先放行 —— 返回 true = 不吞这个键，
+		// 交给浏览器把事件送到聚焦的输入框上（Plan §6 键盘矩阵）。
+		this.scope.register(null, 'ArrowLeft', () => (this.filterOpen ? true : this.step(-1)));
+		this.scope.register(null, 'ArrowRight', () => (this.filterOpen ? true : this.step(1)));
+
+		// 过滤模式（V123）：`/` 唤起、`Esc` 收起。
+		// `/` 一期只在桌面注册：移动端没有物理键盘，软键盘会遮掉半屏（Discuss Q1）。
+		if (!Platform.isMobile) {
+			this.scope.register(null, '/', () => (this.filterOpen ? true : this.openFilter()));
+		}
+		// `Esc` **不走 scope**：真机实测（K4）注册在 `onOpen` 的 scope 抢不过核心的「Esc 关弹窗」
+		// ——按下去弹窗直接关了，过滤框根本没机会收；改用文档级 capture 也**不够**（核心的 keymap
+		// 同样是 document 级 capture，且注册得更早，同相同时按注册顺序跑）。所以挂到 **window**
+		// 的 capture 上：事件路径是 window → document → …，window 一定先手（方案 §10 R1 的回退路径）。
+		activeWindow.addEventListener('keydown', this.onEscapeCapture, true);
 
 		// 文字外面再包一层，方便用 margin: auto 在满屏窗口里居中：
 		// 内容短时居中显示，内容长时仍可从头滚动。
@@ -691,6 +737,8 @@ export class TextPopupModal extends Modal {
 		}
 
 		this.buildControls(this.contentEl);
+		// 过滤框在控制条**之后**建：两者都是绝对定位的兄弟，后插入的天然压在上面（z-index 另给 3）
+		this.buildFilter(this.contentEl);
 		this.updateSize();
 
 		this.show(this.index);
@@ -709,6 +757,8 @@ export class TextPopupModal extends Modal {
 		activeDocument.removeEventListener('pointercancel', this.onPointerCancel);
 		// capture 标记必须与 onOpen 里一致，否则这个监听解绑不掉
 		activeDocument.removeEventListener('keydown', this.onKeyDown, true);
+		// 与 onOpen 同一个目标（window）与同一个 capture 标记，否则解绑不掉
+		activeWindow.removeEventListener('keydown', this.onEscapeCapture, true);
 		activeDocument.removeEventListener('keyup', this.onKeyUp);
 		activeWindow.removeEventListener('blur', this.onWindowBlur);
 		// 移动端滑动监听随弹窗关闭解绑。removeEventListener 不关心 passive，对未注册的监听调用也安全
@@ -756,10 +806,13 @@ export class TextPopupModal extends Modal {
 	 * 切到相邻条目，越界环绕 —— 与内置图片 lightbox 的 navigateMedia 同规则。
 	 * 返回 false 让核心执行 preventDefault + stopPropagation，方向键不会冒泡给编辑器；
 	 * 只有一条时什么都不做。
+	 *
+	 * 范围由 `visibleSize/At/Pos` 收口：过滤生效后它只在**命中集**里走（卡片 A12 的
+	 * 「退出过滤后条件仍生效」），没有过滤时三个函数退化成全集，与今天一字不差。
 	 */
 	private step(delta: number): false {
-		const size = this.source.size;
-		if (size > 1) this.show((this.index + delta + size) % size);
+		const size = this.visibleSize();
+		if (size > 1) this.show(this.visibleAt((this.visiblePos() + delta + size) % size));
 		return false;
 	}
 
@@ -779,12 +832,309 @@ export class TextPopupModal extends Modal {
 		void this.renderBody(body);
 	}
 
-	/** 只有一条时不加序号：标题与 1.0.2 完全一致。 */
+	/**
+	 * 标题栏文案。计数交给 `formatPopupTitle`：有命中走「当前 / 命中数 · 已筛选 (总数)」，
+	 * 否则退回今天这一行（只有一条时不加序号，与 1.0.2 完全一致）。
+	 */
 	private updateTitle(): void {
 		const name = this.source.sourceName || t('Magnified view');
 		const total = this.source.size;
-		this.titleEl.setText(total > 1 ? `${name} · ${this.index + 1} / ${total}` : name);
+		const filtered = this.matches.length > 0;
+		this.titleEl.setText(
+			formatPopupTitle(name, this.visiblePos() + 1, filtered ? this.matches.length : total, total, filtered, t('Filtered')),
+		);
 	}
+
+	// —— 过滤模式（V123）——
+
+	/** 可过滤的元信息；缺失或长度对不上时返回 null（= 今天的旧行为：不注册 `/`、计数不变）。 */
+	private get filterEntries(): readonly PopupEntry[] | null {
+		const entries = this.source.entries;
+		if (!entries || entries.length !== this.source.size) return null;
+		return entries;
+	}
+
+	/** 补全的候选池：本篇**实际出现**的类型（去重、按 `TYPE_ORDER` 排序，卡片 A9）。 */
+	private get typePool(): PopupEntryType[] {
+		return availableTypes(this.filterEntries ?? []);
+	}
+
+	private get suggestOpen(): boolean {
+		return this.suggestItems.length > 0;
+	}
+
+	/** 导航范围：有命中就走命中集，否则走全集。 */
+	private visibleSize(): number {
+		return this.matches.length || this.source.size;
+	}
+
+	/** 命中集 / 全集里第 pos 个 → 全集下标。 */
+	private visibleAt(pos: number): number {
+		return this.matches.length > 0 ? (this.matches[pos] ?? pos) : pos;
+	}
+
+	/** 当前 index 在命中集里的位置；不在命中集里时退回 anchor 所在的位置。 */
+	private visiblePos(): number {
+		if (this.matches.length === 0) return this.index;
+		const at = this.matches.indexOf(this.index);
+		if (at >= 0) return at;
+		const anchor = this.matches.indexOf(this.filterAnchor);
+		return anchor >= 0 ? anchor : 0;
+	}
+
+	/**
+	 * 打开过滤框并聚焦。返回 false = 这个键被我们吞掉了（Scope 会 preventDefault）。
+	 * 不可过滤（没有 entries）或已经开着时返回 true 放行。
+	 */
+	private openFilter(): boolean {
+		if (this.filterOpen || !this.filterEntries) return true;
+		this.filterOpen = true;
+		this.filterAnchor = this.index;
+		this.modalEl.addClass('is-filtering');
+		const input = this.filterInputEl;
+		if (input) {
+			// 恢复上次的条件：卡片 A12「再按 / 回来还在」
+			input.value = this.filterValue;
+			input.focus();
+			const end = input.value.length;
+			input.setSelectionRange(end, end);
+			this.updateSuggest();
+		}
+		// `is-filtering` 改了内容区的 padding-bottom，mermaid / Canvas 的 fit 基线要重算（Plan R2）
+		this.fitScaledContent();
+		return false;
+	}
+
+	/**
+	 * 收起过滤框。条件与命中集**都留着** —— 「保留」= 退出后 ← → 仍在命中项里走、
+	 * 计数仍按命中数显示（[[Discuss-20260925-072827]] Q4 的默认答复）。
+	 *
+	 * 不刻意把焦点塞回控制条按钮：`modal.ts` 那条注释已记录「焦点会被核心退回 `<body>`」，
+	 * 绳子抢不过核心，而空格平移的判据本来就容得下 `target = body`。
+	 */
+	private closeFilter(): void {
+		if (!this.filterOpen) return;
+		this.filterOpen = false;
+		this.hideSuggest();
+		this.modalEl.removeClass('is-filtering');
+		this.filterInputEl?.blur();
+		this.fitScaledContent();
+	}
+
+	/** 清空条件（= 真的没有条件，回到全量）。Ctrl/⌘+C（无选区）与 Ctrl/⌘+U 都走这里。 */
+	private clearFilter(): void {
+		this.filterValue = '';
+		this.matches = [];
+		const input = this.filterInputEl;
+		if (input) {
+			input.value = '';
+			input.removeClass('is-no-match');
+		}
+		this.hideSuggest();
+		this.updateTitle();
+	}
+
+	/**
+	 * 每次输入变化跑一遍：解析 → 算命中集 → 决定标不标红、要不要跳。
+	 *
+	 * 「未定态一律按全量、不标红」是刻意的：敲到 `@` 或 `@c`（code/callout/canvas 都前缀命中）
+	 * 时红盒闪一下是纯噪音，真正「输完了却没命中」才标红（卡片 A6）。
+	 */
+	private applyFilter(): void {
+		const entries = this.filterEntries;
+		if (!entries) return;
+		const filter = parseFilterInput(this.filterValue, this.typePool);
+		const undetermined = filter.field === null && filter.query === '';
+		this.matches = undetermined ? [] : matchEntries(entries, filter);
+		this.filterInputEl?.toggleClass('is-no-match', !undetermined && this.matches.length === 0);
+		if (undetermined) {
+			this.updateTitle();
+			return;
+		}
+		const first = this.matches[0];
+		if (this.matches.length === 0) {
+			// 零命中：回到打开过滤时那一条，弹窗内容不动（卡片 A6）
+			if (this.index !== this.filterAnchor) this.show(this.filterAnchor);
+			else this.updateTitle();
+			return;
+		}
+		if (this.matches.includes(this.index)) {
+			// 已在命中集里：只更新计数，不重渲染（避免每敲一个字画面都闪）
+			this.updateTitle();
+			return;
+		}
+		if (first !== undefined) this.show(first);
+	}
+
+	/** 在命中项之间移动（↑ / ↓ / Enter）。没有命中集时不动 —— 那时 ↑↓ 本来就无绑定。 */
+	private moveMatch(delta: number): void {
+		const size = this.matches.length;
+		if (size === 0) return;
+		this.show(this.visibleAt((this.visiblePos() + delta + size) % size));
+	}
+
+	private buildFilter(parentEl: HTMLElement): void {
+		const filterEl = parentEl.createDiv({ cls: 'text-popup-filter' });
+		const inputEl = filterEl.createEl('input', {
+			cls: 'text-popup-filter-input',
+			type: 'text',
+			attr: {
+				'aria-label': t('Filter blocks'),
+				placeholder: t('Type to filter, @ for type'),
+				spellcheck: 'false',
+				autocomplete: 'off',
+			},
+		});
+		const suggestEl = filterEl.createDiv({ cls: 'text-popup-filter-suggest' });
+		this.filterInputEl = inputEl;
+		this.suggestEl = suggestEl;
+
+		inputEl.addEventListener('input', () => {
+			this.filterValue = inputEl.value;
+			this.applyFilter();
+			this.updateSuggest();
+		});
+		inputEl.addEventListener('keydown', this.onFilterKeyDown);
+		// 焦点离开输入框（点了正文 / Tab 走开）时收起补全：列表跟着光标，没人看就别占着屏幕
+		inputEl.addEventListener('blur', () => this.hideSuggest());
+	}
+
+	/** 补全弹层：要不要显示、显示哪些。判据见 `suggestionContext`（一敲空格进入 query 段就收起）。 */
+	private updateSuggest(): void {
+		const input = this.filterInputEl;
+		if (!input) return;
+		const ctx = suggestionContext(input.value, input.selectionStart ?? input.value.length);
+		if (!ctx.showing) {
+			this.hideSuggest();
+			return;
+		}
+		this.suggestItems = suggestTypes(ctx.token, this.typePool);
+		this.suggestIndex = this.suggestItems.length > 0 ? 0 : -1;
+		this.renderSuggest();
+	}
+
+	private renderSuggest(): void {
+		const suggestEl = this.suggestEl;
+		if (!suggestEl) return;
+		suggestEl.empty();
+		if (this.suggestItems.length === 0) {
+			suggestEl.removeClass('is-open');
+			return;
+		}
+		// 类型令牌是 Vim 风格的语法，**不翻译**（与方案 §8 同口径）
+		this.suggestItems.forEach((type, i) => {
+			suggestEl.createDiv({
+				cls: `text-popup-filter-suggest-item${i === this.suggestIndex ? ' is-active' : ''}`,
+				text: `@${type}`,
+			});
+		});
+		suggestEl.addClass('is-open');
+	}
+
+	private hideSuggest(): void {
+		this.suggestItems = [];
+		this.suggestIndex = -1;
+		this.suggestEl?.removeClass('is-open');
+		this.suggestEl?.empty();
+	}
+
+	private moveSuggest(delta: number): void {
+		const size = this.suggestItems.length;
+		if (size === 0) return;
+		this.suggestIndex = (this.suggestIndex + delta + size) % size;
+		this.renderSuggest();
+	}
+
+	/** 采纳当前高亮项：把 `@token` 换成 `@type `，光标落到末尾，保持过滤态。 */
+	private acceptSuggest(): void {
+		const input = this.filterInputEl;
+		const type = this.suggestItems[this.suggestIndex];
+		if (!input || !type) return;
+		const value = input.value;
+		const boundary = /\s/.exec(value)?.index ?? value.length;
+		// 后面没内容时补一个空格：既让补全立刻收起，也让用户能接着打 query
+		const next = `@${type}${value.slice(boundary) || ' '}`;
+		input.value = next;
+		input.setSelectionRange(next.length, next.length);
+		this.filterValue = next;
+		this.hideSuggest();
+		this.applyFilter();
+	}
+
+	/**
+	 * `Esc` 的 capture 监听：过滤态下先收补全、再收过滤框，收完就把事件掐断 —— 核心的
+	 * 「Esc 关弹窗」因此看不到它。不在过滤态时一律放行（弹窗照常关）。
+	 *
+	 * 判据「是不是别人的弹窗」与空格那条（`onKeyDown`）同写法：焦点可能已被核心退回 `<body>`，
+	 * 所以只看「事件目标落在**别的** `.modal-container` 里」—— 那时该键归上面那层弹窗。
+	 */
+	private onEscapeCapture = (evt: KeyboardEvent): void => {
+		if (evt.key !== 'Escape' || evt.isComposing || !this.filterOpen) return;
+		const holder = evt.target instanceof Element ? evt.target.closest('.modal-container') : null;
+		if (holder && !holder.contains(this.modalEl)) return;
+		evt.preventDefault();
+		evt.stopPropagation();
+		if (this.suggestOpen) {
+			this.hideSuggest();
+			return;
+		}
+		this.closeFilter();
+	};
+
+	/**
+	 * 输入框自己的 keydown。
+	 *
+	 * 顺序即优先级：补全打开时 ↑↓/Enter/Tab 全归补全；否则 ↑↓ 走命中项、Enter 跳下一个命中项。
+	 * `Esc` **不在这里处理** —— 让它冒泡到弹窗 scope 上统一判「关补全 / 收过滤框 / 关弹窗」。
+	 */
+	private onFilterKeyDown = (evt: KeyboardEvent): void => {
+		// 输入法拼字中一律放行：中文候选还没上屏时 Enter / Esc 是「确认 / 取消候选」，
+		// 被我们截走的话中文用户第一个字就打不出来（Plan §10 R3，真机 K6 验）
+		if (evt.isComposing) return;
+		if (this.suggestOpen) {
+			if (evt.key === 'ArrowDown') {
+				evt.preventDefault();
+				this.moveSuggest(1);
+				return;
+			}
+			if (evt.key === 'ArrowUp') {
+				evt.preventDefault();
+				this.moveSuggest(-1);
+				return;
+			}
+			// Tab 只在补全打开时截获：不打开时不截，那会把键盘用户的焦点环切断
+			if (evt.key === 'Enter' || evt.key === 'Tab') {
+				evt.preventDefault();
+				this.acceptSuggest();
+				return;
+			}
+		}
+		if (evt.key === 'ArrowUp') {
+			evt.preventDefault();
+			this.moveMatch(-1);
+			return;
+		}
+		if (evt.key === 'ArrowDown' || evt.key === 'Enter') {
+			evt.preventDefault();
+			this.moveMatch(1);
+			return;
+		}
+		if (evt.ctrlKey || evt.metaKey) {
+			const key = evt.key.toLowerCase();
+			if (key !== 'c' && key !== 'u') return;
+			// `Ctrl/⌘+C` 只在「框内没有选区」时才当清空：有选区时它是复制
+			// （无选区时它本来什么都不做，所以吞掉不损失任何既有行为）
+			const input = this.filterInputEl;
+			const selected =
+				input !== null &&
+				input.selectionStart !== null &&
+				input.selectionEnd !== null &&
+				input.selectionEnd > input.selectionStart;
+			if (key === 'c' && selected) return;
+			evt.preventDefault();
+			this.clearFilter();
+		}
+	};
 
 	/**
 	 * 渲染一条内容。

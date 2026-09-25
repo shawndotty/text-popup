@@ -94,6 +94,11 @@ const zhCN: Partial<typeof en> = {
 	Reset: '恢复默认',
 	'Magnified view': '放大显示',
 
+	// —— 弹窗过滤模式 ——
+	'Filter blocks': '过滤区块',
+	'Type to filter, @ for type': '输入内容过滤，@ 按类型',
+	Filtered: '已筛选',
+
 	// —— 放大图标的 aria-label ——
 	'Magnify': '放大显示',
 };
