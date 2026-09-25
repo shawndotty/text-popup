@@ -639,13 +639,23 @@
 
 /* 过滤框（V123，方案 [[Plan-20260925-072735]] §7）
 
-   为什么是**绝对定位**而不是在 flow 里加一行：底部控制条本来就是 `position: absolute`
-   （见上面那条），而 `.text-popup-content` 的高度一旦被挤掉一块，mermaid 的 `--tp-mermaid-w`
-   与 Canvas 的 `--tp-canvas-fit` 两套 fit 基线都要跟着变 —— 那是两轮方案才钉住的数字，
-   一期不碰。所以过滤框照抄控制条的做法浮在底部，再把控制条往上顶一条的高度，
-   内容区则把被占掉的那一条 padding 补回来（`is-filtering` 那两条）。
+   绝对定位 + 贴底 `bottom: 0`：过滤框出现 / 收起都**不占 flow**，兄弟元素一行都不动。
 
-   高度写成变量 `--text-popup-filter-h`：真机量测与后续微调都只动这一个数。 */
+   为什么必须这样（V123 反馈三）：`.text-popup-content` 是滚动容器，而正文 `.text-popup-text`
+   用 `margin: auto` 居中 —— 内容区 padding 一动，正文就重新居中。曾经那版补偿规则
+   （`is-filtering .text-popup-content { padding-bottom: calc(64px + 过滤框高) }`）正是把
+   padding 从 64px 顶到 104px，真机实测正文 y 从 341.1 **上跳 20px** 到 321.1 —— 就是用户看到的
+   「输入框一出现内容被推上去」。同族的代价还有 mermaid 的 `--tp-mermaid-w` 与 Canvas 的
+   `--tp-canvas-fit` 两套 fit 基线，那两轮方案钉住的数字都会跟着变。补偿规则已删：滚动区本来就留了
+   `--size-4-16`(64px) 的下内边距，足够让最后一行滚到过滤框（实测 38.6px 高）上方。
+
+   贴底 = **直接盖住控制条**：过滤框与底部控制条本就互斥（过滤时看的是命中数，不是翻页 / 缩放），
+   所以下面 `is-filtering` 那条把控制条 `display: none`，不再实测控制条高度、
+   `--text-popup-controls-h` 这个变量随之作废。图片 / Canvas 那三类内容下控制条本来就是
+   `display: none`，本规则对它们零影响。
+
+   高度写成变量 `--text-popup-filter-h`：`@` 补全弹层按它往上让位
+   （见 `.text-popup-filter-suggest`），真机量测与后续微调都只动这一个数。 */
 
 .mod-text-popup {
 	--text-popup-filter-h: 40px;
@@ -653,6 +663,7 @@
 
 .mod-text-popup .text-popup-filter {
 	position: absolute;
+	/* 贴底：盖住控制条那一格（控制条自己也是 absolute，见上面那条规则） */
 	bottom: 0;
 	left: 0;
 	width: 100%;
@@ -671,17 +682,10 @@
 	display: flex;
 }
 
-/* 过滤框出现时把控制条顶上去：两者都是绝对定位，不顶就会叠在一起。
-   图片 / Canvas 下控制条自己是 `display: none`（上面那条），这条对它无副作用。 */
+/* 过滤态与控制条互斥：过滤框贴底出现，控制条留着就会被压住半个。隐藏不改布局 ——
+   控制条自己也是 `position: absolute`，不是 flow 项（所以正文与滚动高度一个像素都不动）。 */
 .mod-text-popup.is-filtering .text-popup-controls {
-	bottom: var(--text-popup-filter-h);
-}
-
-/* 内容区把被过滤框占掉的那一条补回来 —— 滚到底时最后一行不会被压在框下面（真机 L1）。
-   切 `is-filtering` 之后必须手动跑一次 `fitScaledContent()`：它的触发源只有 resize 与
-   MutationObserver（childList），padding 变化不在这两者里（modal.ts 的 openFilter/closeFilter）。 */
-.mod-text-popup.is-filtering .text-popup-content {
-	padding-bottom: calc(var(--size-4-16) + var(--text-popup-filter-h));
+	display: none;
 }
 
 /* 输入框本体：与主题融合、不突出（卡片 A2）—— 透明背景、无外框，只用正文色与 UI 小字号。
@@ -715,18 +719,20 @@
 	color: var(--text-error);
 }
 
-/* `@` 补全弹层：贴在过滤框上方，居中、可滚、最多占四成高度。
+/* `@` 补全弹层：贴在过滤框上方、与 `@` 左边缘对齐。
+   落点与最大高度都是 `modal.ts` 的 `positionSuggest()` 实测后写进内联样式的 —— 别搬回 CSS：
+   弹层的包含块就是过滤框本身（才 39px 高），`left: 50%` 会变成「相对整条过滤框居中」（= 屏幕中间，
+   V123 反馈二），`max-height: 40%` 只会算出 ≈15px 的窄条贴在输入框上沿。真机实测过这两个数。
    皮肤用 `--background-primary` + `--background-modifier-hover`，**不用**输入框那套皮肤 ——
    那会把弹层画成第二个输入框，太突出（违 A2）。 */
 .mod-text-popup .text-popup-filter-suggest {
 	position: absolute;
 	bottom: calc(var(--text-popup-filter-h) + var(--size-2-2));
-	left: 50%;
-	transform: translateX(-50%);
+	/* 兜底值：positionSuggest() 一定会覆盖；取 0 而不是 50%，漏算时也只会贴左、不会跑到屏幕中间 */
+	left: 0;
 	z-index: 3;
 	display: none;
 	flex-direction: column;
-	max-height: 40%;
 	overflow-y: auto;
 	padding: var(--size-2-2);
 	border: 1px solid var(--background-modifier-border);

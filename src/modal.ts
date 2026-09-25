@@ -1,9 +1,10 @@
-import { App, Component, MarkdownRenderer, Modal, Platform, setIcon } from 'obsidian';
+import { App, Component, MarkdownRenderer, Modal, Platform, Scope, setIcon } from 'obsidian';
 import {
 	availableTypes,
 	formatPopupTitle,
 	matchEntries,
 	parseFilterInput,
+	suggestAnchorLeft,
 	suggestTypes,
 	suggestionContext,
 } from './filter';
@@ -505,6 +506,28 @@ export class TextPopupModal extends Modal {
 	/** 进入过滤态那一刻的 index：零命中时退回它（卡片 A6）。 */
 	private filterAnchor = 0;
 	private filterInputEl: HTMLInputElement | null = null;
+	/** 过滤框本体：补全弹层的包含块（它是绝对定位的），也是弹层落点的坐标原点。 */
+	private filterEl: HTMLElement | null = null;
+	private controlsEl: HTMLElement | null = null;
+	/**
+	 * 过滤态压的那层 scope（惰性建，见 `ensureFilterScope`）。
+	 *
+	 * 为什么不能把 `Esc` 直接注册在弹窗自己的 scope 上：核心在 CloseableComponent **构造**时就
+	 * 把 `Esc → close()` 注册进了同一个 scope（`app.js` 里 `this.scope.register([],"Escape",
+	 * this.onEscapeKey.bind(this))`），而 `Scope.handleKey` 是按**注册顺序**遍历的（`register`
+	 * 用 `keys.push`，先进先出）—— 后来注册的那条排在核心后面，永远轮不到它（Plan §10 R1
+	 * 「后注册者先手」的判据是错的，真机所见：过滤态按 Esc 弹窗直接关了）。
+	 *
+	 * 也不能靠「更早的 capture 监听」抢：核心的 `Keymap` 自己就是
+	 * `window.addEventListener("keydown", …, !0)`，注册于 app 启动瞬间 —— 早于任何插件监听，
+	 * 同是 window + capture 时先注册者先跑（这就是原先那条 window capture 监听无效的原因）。
+	 *
+	 * 可行的一条路是压一层**子 scope**：`Keymap.onKeyEvent` 只取 window scope 栈顶的那一个，
+	 * 而 `Scope.handleKey` 先走自己的 keys、没匹配才 `parent.handleKey` —— 栈顶是我们的，
+	 * 命中 `Esc` 并返回 false 就到此为止，父 scope（= 弹窗 scope，上面挂着核心那条 Esc → 关窗）
+	 * 根本走不到。其余键一个不受影响：它们在这层没匹配，照常落到父 scope。
+	 */
+	private filterScope: Scope | null = null;
 	private suggestEl: HTMLElement | null = null;
 	private suggestItems: PopupEntryType[] = [];
 	/** 高亮项下标；-1 = 没有高亮（列表为空时）。 */
@@ -691,11 +714,8 @@ export class TextPopupModal extends Modal {
 		if (!Platform.isMobile) {
 			this.scope.register(null, '/', () => (this.filterOpen ? true : this.openFilter()));
 		}
-		// `Esc` **不走 scope**：真机实测（K4）注册在 `onOpen` 的 scope 抢不过核心的「Esc 关弹窗」
-		// ——按下去弹窗直接关了，过滤框根本没机会收；改用文档级 capture 也**不够**（核心的 keymap
-		// 同样是 document 级 capture，且注册得更早，同相同时按注册顺序跑）。所以挂到 **window**
-		// 的 capture 上：事件路径是 window → document → …，window 一定先手（方案 §10 R1 的回退路径）。
-		activeWindow.addEventListener('keydown', this.onEscapeCapture, true);
+		// `Esc` 不在这里注册 —— 它走在键盘打开时压进去的那层子 scope 上（见 `filterScope`），
+		// 弹窗自己的 scope 上那条会被核心同 scope 的「Esc 关窗」先手。
 
 		// 文字外面再包一层，方便用 margin: auto 在满屏窗口里居中：
 		// 内容短时居中显示，内容长时仍可从头滚动。
@@ -757,8 +777,8 @@ export class TextPopupModal extends Modal {
 		activeDocument.removeEventListener('pointercancel', this.onPointerCancel);
 		// capture 标记必须与 onOpen 里一致，否则这个监听解绑不掉
 		activeDocument.removeEventListener('keydown', this.onKeyDown, true);
-		// 与 onOpen 同一个目标（window）与同一个 capture 标记，否则解绑不掉
-		activeWindow.removeEventListener('keydown', this.onEscapeCapture, true);
+		// 过滤态压的那层 scope 要在最后一个 handler 跑之前收回：栈留在里面会让键盘栈越来越长
+		if (this.filterScope) this.app.keymap.popScope(this.filterScope);
 		activeDocument.removeEventListener('keyup', this.onKeyUp);
 		activeWindow.removeEventListener('blur', this.onWindowBlur);
 		// 移动端滑动监听随弹窗关闭解绑。removeEventListener 不关心 passive，对未注册的监听调用也安全
@@ -890,7 +910,12 @@ export class TextPopupModal extends Modal {
 		if (this.filterOpen || !this.filterEntries) return true;
 		this.filterOpen = true;
 		this.filterAnchor = this.index;
+		// `is-filtering` 只切两条纯视觉规则：过滤框贴底出现（`bottom: 0`）、控制条隐藏。
+		// 两者都是 `position: absolute`、不占 flow —— 内容区的尺寸与 padding 一个像素都不动，
+		// 所以这里**不**重算 mermaid / Canvas 的 fit 基线，正文也不会重新居中（V123 反馈三）。
 		this.modalEl.addClass('is-filtering');
+		// 这层 scope 先于任何 keydown 生效：`Esc` 由它接住，核心的「Esc 关弹窗」看不到。
+		this.app.keymap.pushScope(this.ensureFilterScope());
 		const input = this.filterInputEl;
 		if (input) {
 			// 恢复上次的条件：卡片 A12「再按 / 回来还在」
@@ -900,8 +925,6 @@ export class TextPopupModal extends Modal {
 			input.setSelectionRange(end, end);
 			this.updateSuggest();
 		}
-		// `is-filtering` 改了内容区的 padding-bottom，mermaid / Canvas 的 fit 基线要重算（Plan R2）
-		this.fitScaledContent();
 		return false;
 	}
 
@@ -911,6 +934,8 @@ export class TextPopupModal extends Modal {
 	 *
 	 * 不刻意把焦点塞回控制条按钮：`modal.ts` 那条注释已记录「焦点会被核心退回 `<body>`」，
 	 * 绳子抢不过核心，而空格平移的判据本来就容得下 `target = body`。
+	 *
+	 * 也**不**重算 fit：`is-filtering` 摘掉后内容区仍是原尺寸、正文仍在原位置（见 `openFilter`）。
 	 */
 	private closeFilter(): void {
 		if (!this.filterOpen) return;
@@ -918,7 +943,8 @@ export class TextPopupModal extends Modal {
 		this.hideSuggest();
 		this.modalEl.removeClass('is-filtering');
 		this.filterInputEl?.blur();
-		this.fitScaledContent();
+		// 收弹出的 scope：再按 Esc 就该回到「关弹窗」这条核心路径上去
+		if (this.filterScope) this.app.keymap.popScope(this.filterScope);
 	}
 
 	/** 清空条件（= 真的没有条件，回到全量）。Ctrl/⌘+C（无选区）与 Ctrl/⌘+U 都走这里。 */
@@ -987,6 +1013,7 @@ export class TextPopupModal extends Modal {
 		});
 		const suggestEl = filterEl.createDiv({ cls: 'text-popup-filter-suggest' });
 		this.filterInputEl = inputEl;
+		this.filterEl = filterEl;
 		this.suggestEl = suggestEl;
 
 		inputEl.addEventListener('input', () => {
@@ -1029,6 +1056,46 @@ export class TextPopupModal extends Modal {
 			});
 		});
 		suggestEl.addClass('is-open');
+		this.positionSuggest();
+	}
+
+	/**
+	 * 把补全弹层挪到 `@` 旁边（V123 反馈二）。
+	 *
+	 * 两条回归都在这里：
+	 *   ① **水平**：CSS 原来写 `left: 50%` + `translateX(-50%)`，相对整条过滤框居中 —— 输入框铺满
+	 *      一行，看着就落在屏幕中间。改成与 `@` 左边缘对齐，夹取交给 `suggestAnchorLeft`。
+	 *   ② **高度**：CSS 原来写 `max-height: 40%`，而包含块是过滤框自己也才 39px 高 —— 真机实测
+	 *      弹层被压成 **15px** 的窄条贴在输入框上沿（用户读到的「被输入框挡住」）。百分比在这儿
+	 *      没有意义，所以按「弹层底边到弹窗顶」实测出来的空间写死一个 max-height，列表长了在
+	 *      弹层内部滚。
+	 *
+	 * `@` 的位置不用字符测量镜像：`suggestionContext` 要求输入以 `@` 打头，所以它恒是输入框里的
+	 * **第一个字符** —— 左边缘就是输入框内容盒的左边缘，再减去输入框自己的横向滚动量（条件长到
+	 * 输入框内部滚起来时，`@` 会被推出视野，那时夹取会把弹层钉在过滤框左边缘）。
+	 */
+	private positionSuggest(): void {
+		const { suggestEl, filterInputEl: input, filterEl } = this;
+		if (!suggestEl || !input || !filterEl) return;
+		const barRect = filterEl.getBoundingClientRect();
+		const inputRect = input.getBoundingClientRect();
+		const inputStyle = activeWindow.getComputedStyle(input);
+		const barStyle = activeWindow.getComputedStyle(filterEl);
+		const margin = parseFloat(barStyle.paddingLeft) || 0;
+		const textOrigin =
+			inputRect.left +
+			(parseFloat(inputStyle.borderLeftWidth) || 0) +
+			(parseFloat(inputStyle.paddingLeft) || 0) -
+			input.scrollLeft -
+			barRect.left;
+		// 先清掉上一轮的高度再量宽：15px 的窄条量出来的宽跟着内容换行，落点会飘
+		suggestEl.style.removeProperty('max-height');
+		const boxWidth = suggestEl.getBoundingClientRect().width;
+		suggestEl.style.left = `${suggestAnchorLeft(textOrigin, boxWidth, barRect.width, margin)}px`;
+		// 可用高度 = 弹层底边到弹窗顶（弹层自己贴在地面上、只往上长）
+		const top = this.modalEl.getBoundingClientRect().top;
+		const available = suggestEl.getBoundingClientRect().bottom - top - margin;
+		suggestEl.style.maxHeight = `${Math.max(0, available)}px`;
 	}
 
 	private hideSuggest(): void {
@@ -1062,24 +1129,26 @@ export class TextPopupModal extends Modal {
 	}
 
 	/**
-	 * `Esc` 的 capture 监听：过滤态下先收补全、再收过滤框，收完就把事件掐断 —— 核心的
-	 * 「Esc 关弹窗」因此看不到它。不在过滤态时一律放行（弹窗照常关）。
+	 * 过滤态专用的键盘层（父 scope = 弹窗自己的 scope）。
 	 *
-	 * 判据「是不是别人的弹窗」与空格那条（`onKeyDown`）同写法：焦点可能已被核心退回 `<body>`，
-	 * 所以只看「事件目标落在**别的** `.modal-container` 里」—— 那时该键归上面那层弹窗。
+	 * 只注册 `Esc` 一条：`←→` / `/` 这些在这层没有匹配，会顺着 parent 走到弹窗 scope 上去，
+	 * 行为一字不变。返回值按 `Scope.handleKey` 的口径：返回 `false` = 吞掉这个键（Keymap 会
+	 * `preventDefault` + `stopPropagation`），返回 `true` = 不处理、也不让父 scope 处理。
 	 */
-	private onEscapeCapture = (evt: KeyboardEvent): void => {
-		if (evt.key !== 'Escape' || evt.isComposing || !this.filterOpen) return;
-		const holder = evt.target instanceof Element ? evt.target.closest('.modal-container') : null;
-		if (holder && !holder.contains(this.modalEl)) return;
-		evt.preventDefault();
-		evt.stopPropagation();
-		if (this.suggestOpen) {
-			this.hideSuggest();
-			return;
+	private ensureFilterScope(): Scope {
+		if (!this.filterScope) {
+			const scope = new Scope(this.scope);
+			scope.register(null, 'Escape', (evt: KeyboardEvent) => {
+				// 输入法拼字中：Esc 是「取消候选」，一律放行给输入框（Plan §10 R3，真机 K6）
+				if (evt.isComposing) return true;
+				if (this.suggestOpen) this.hideSuggest();
+				else this.closeFilter();
+				return false;
+			});
+			this.filterScope = scope;
 		}
-		this.closeFilter();
-	};
+		return this.filterScope;
+	}
 
 	/**
 	 * 输入框自己的 keydown。
@@ -1268,6 +1337,7 @@ export class TextPopupModal extends Modal {
 
 	private buildControls(parentEl: HTMLElement): void {
 		const controlsEl = parentEl.createDiv({ cls: 'text-popup-controls' });
+		this.controlsEl = controlsEl;
 
 		const fontGroupEl = controlsEl.createDiv({ cls: 'text-popup-control-group' });
 		fontGroupEl.createSpan({ cls: 'text-popup-control-label', text: t('Font size') });

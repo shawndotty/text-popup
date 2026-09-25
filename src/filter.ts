@@ -194,6 +194,27 @@ export function suggestionContext(input: string, caret: number): SuggestionConte
 }
 
 /**
+ * 补全弹层的水平落点：与 `@` 左边缘对齐，再夹进过滤框内（右侧至少留 `margin`）。
+ *
+ * 与 `@` 对齐是用户点名要的（V123 反馈二）：原来写在 CSS 里的 `left: 50%` + `translateX(-50%)`
+ * 是相对整条过滤框居中的，输入框铺满一行时看着就落在**屏幕中间**，离 `@` 十万八千里。
+ *
+ * 夹取不是防御性代码：条件长到光标顶到输入框右端时，对齐落点会让整块弹层跑出过滤框被弹窗裁掉，
+ * 夹回「右边距 = margin」才一直在框内（`boxWidth > barWidth - margin` 时落到 0，宁可左边贴边）。
+ *
+ * 纯函数、只吃数字：真机几何（`getBoundingClientRect`、字体度量、`scrollLeft`）只能在
+ * `modal.ts` 里量 —— 与文件头「弹窗层判据在本仓库没有可跑的 DOM 环境」同源。
+ */
+export function suggestAnchorLeft(
+	anchor: number,
+	boxWidth: number,
+	barWidth: number,
+	margin: number,
+): number {
+	return Math.max(0, Math.min(anchor, barWidth - boxWidth - margin));
+}
+
+/**
  * 标题栏文案。三种形态（方案 §5.5）：
  * - 有命中：`名称 · 2 / 5 · 已筛选 (12)`；
  * - 无过滤 / 无命中：`名称 · 7 / 12`；

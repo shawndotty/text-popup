@@ -3,8 +3,8 @@
  *
  * 这一层是**纯函数**：只吃 `TextBlockRegion` 与字符串，不碰 DOM / App，所以能整层钉在单测里
  * （与 `modal.ts` 的 `wheelZoomTarget` / `settleZoomFrame` 同一条理由）。真机只验接线与几何：
- * 键盘（`/` 唤起、`Esc` 抢不抢得过核心关窗、输入法）、布局（控制条被隐藏时过滤条还在不在）、
- * 以及 `is-filtering` 改 padding 之后 mermaid / Canvas 的 fit 基线有没有被动到。
+ * 键盘（`/` 唤起、`Esc` 抢不抢得过核心关窗、输入法）、布局（过滤框贴底盖住控制条、
+ * 开关过滤时正文一行都不动）、以及 `@` 补全弹层贴不贴 `@`。
  *
  * 三条口径来自 [[Discuss-20260925-072827]] 的默认答复，这里各钉一条：
  * - Q5/Q6：`math` / `html` 一并支持、`excalidraw` 单独一路（但不动 `BlockKind`）；
@@ -28,6 +28,7 @@ const {
 	formatPopupTitle,
 	matchEntries,
 	parseFilterInput,
+	suggestAnchorLeft,
 	suggestTypes,
 	suggestionContext,
 } = await jiti.import('../src/filter.ts');
@@ -195,6 +196,26 @@ test('suggestionContext: 只在「@ 打头 + 光标在第一个令牌内」时�
 		suggestionContext('abc', 3),
 		{ showing: false, token: '' },
 		'不是 @ 打头（全文搜索）→ 不显示',
+	);
+});
+
+/* ————————————————————————————————————————————————
+   suggestAnchorLeft
+   ———————————————————————————————————————————————— */
+
+test('suggestAnchorLeft: 与 `@` 对齐，越界时夹进过滤框', () => {
+	assert.equal(suggestAnchorLeft(23, 75, 1481, 16), 23, '正常情形：就是 `@` 左边缘');
+	assert.equal(suggestAnchorLeft(1390, 75, 1481, 16), 1390, '正好卡在右边距上，不动');
+	assert.equal(
+		suggestAnchorLeft(1420, 75, 1481, 16),
+		1390,
+		'`@` 贴到右端时夹回右边距 —— 这是 V123 反馈二里「屏幕居中」之外的另一半（原来会整块溢出弹窗）',
+	);
+	assert.equal(suggestAnchorLeft(0, 75, 1481, 16), 0, '`@` 在左端就是 0');
+	assert.equal(
+		suggestAnchorLeft(23, 2000, 1481, 16),
+		0,
+		'弹层比过滤框还宽时退回 0（宁可左边贴边，也不出负数把它顶出框外）',
 	);
 });
 
