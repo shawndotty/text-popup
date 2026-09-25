@@ -1,1 +1,3 @@
-- optimize mobile style
+- add filter mode
+- use `/` to triger filter mode
+- use `[` or `]` to jump to the first or last block 
