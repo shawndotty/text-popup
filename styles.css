@@ -765,6 +765,19 @@
 	text-decoration: none;
 }
 
+/* 过滤命中：给演示正文里与搜索词相同的可见文本加一层高亮底色（V124，需求见 [[Plan-20260925-163649]]）。
+   背景用核心的 --text-highlight-bg（`==高亮==` 用的同一支变量）—— 亮 / 暗 / 主题三态都跟随，
+   不写死颜色、不加设置项。padding 保持 0：mark 一旦有内边距就会改变行内盒高度，把 V116 那套
+   fit 基线（mermaid / 画布的「一屏装下」）带偏。
+   选择器必须挂在 .mod-text-popup 下，不碰全局 mark —— 否则会改到编辑器 / 阅读视图，
+   也会盖住 `==高亮==` 转出来的那个 mark。 */
+.mod-text-popup .text-popup-text mark.text-popup-match {
+	background-color: var(--text-highlight-bg);
+	color: inherit;
+	padding: 0;
+	border-radius: var(--radius-s);
+}
+
 /* ==========================================================================
    移动端优化
    ========================================================================== */

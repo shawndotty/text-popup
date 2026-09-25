@@ -26,9 +26,11 @@ const {
 	edgeIndex,
 	entrySearchText,
 	entryTypeOf,
+	findMatchRanges,
 	formatPopupTitle,
 	matchEntries,
 	parseFilterInput,
+	queryTokens,
 	suggestAnchorLeft,
 	suggestTypes,
 	suggestionContext,
@@ -141,6 +143,60 @@ test('matchEntries: 返回的是全集下标（不是过滤后的子数组），
 		[0, 2],
 	);
 	assert.deepEqual(matchEntries([], { field: null, query: 'a' }), []);
+});
+
+/* ————————————————————————————————————————————————
+   queryTokens / findMatchRanges（V124 命中高亮，方案 [[Plan-20260925-163649]] §5）
+   ———————————————————————————————————————————————— */
+
+test('queryTokens: 空 / 多空格 / 首尾空格 / 大小写折平', () => {
+	assert.deepEqual(queryTokens(''), []);
+	assert.deepEqual(queryTokens('   '), []);
+	assert.deepEqual(queryTokens('  Foo  bar '), ['foo', 'bar']);
+	assert.deepEqual(queryTokens('中文'), ['中文'], '不做分词，与 V123 一致');
+});
+
+test('queryTokens: 与 matchEntries 的令牌逐条等值（同源，防止「筛出来却不高亮」）', () => {
+	// matchEntries 的命中结果必须能由 queryTokens 原样解释 —— 这里用真数据反推令牌：
+	const entries = [entry('quote', 'Hello World')];
+	assert.deepEqual(matchEntries(entries, { field: null, query: ' HeLLo   worLD ' }), [0]);
+	assert.deepEqual(queryTokens(' HeLLo   worLD ').every((tok) => 'hello world'.includes(tok)), true);
+});
+
+test('findMatchRanges: 多处命中全收，且下标落原串（大小写不敏感）', () => {
+	assert.deepEqual(findMatchRanges('foo BAR', ['bar']), [[4, 7]], '返回原串下标，不是小写后的');
+	assert.deepEqual(findMatchRanges('aXa', ['a']), [
+		[0, 1],
+		[2, 3],
+	]);
+});
+
+test('findMatchRanges: 多令牌各收各的并按起点排序', () => {
+	assert.deepEqual(findMatchRanges('beta alpha', ['alpha', 'beta']), [
+		[0, 4],
+		[5, 10],
+	]);
+});
+
+test('findMatchRanges: 重叠 / 相接都合并', () => {
+	assert.deepEqual(findMatchRanges('abc', ['ab', 'bc']), [[0, 3]], '重叠合并');
+	assert.deepEqual(findMatchRanges('abc', ['ab', 'c']), [[0, 3]], '相接也合');
+});
+
+test('findMatchRanges: 同一令牌不重叠前进（`aaa` 搜 `aa` 只收一处）', () => {
+	assert.deepEqual(findMatchRanges('aaa', ['aa']), [[0, 2]]);
+});
+
+test('findMatchRanges: 空令牌 / 空文本 / 无命中 → 空数组', () => {
+	assert.deepEqual(findMatchRanges('abc', []), []);
+	assert.deepEqual(findMatchRanges('', ['a']), []);
+	assert.deepEqual(findMatchRanges('abc', ['zz']), []);
+	assert.deepEqual(findMatchRanges('abc', ['abcd']), [], '令牌长于文本');
+});
+
+test('findMatchRanges: 小写化改变长度 → 整段放弃（下标已不可用）', () => {
+	// `İ`(U+0130) 折成 `i̇` 是 2 个码元，长度一变下标就指向错的字符
+	assert.deepEqual(findMatchRanges('İx', ['i']), []);
 });
 
 /* ————————————————————————————————————————————————

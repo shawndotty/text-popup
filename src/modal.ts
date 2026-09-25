@@ -2,9 +2,11 @@ import { App, Component, MarkdownRenderer, Modal, Platform, Scope, setIcon } fro
 import {
 	availableTypes,
 	edgeIndex,
+	findMatchRanges,
 	formatPopupTitle,
 	matchEntries,
 	parseFilterInput,
+	queryTokens,
 	suggestAnchorLeft,
 	suggestTypes,
 	suggestionContext,
@@ -989,6 +991,7 @@ export class TextPopupModal extends Modal {
 		}
 		this.hideSuggest();
 		this.updateTitle();
+		this.refreshHighlight(); // 条件清空 → 命中集已空：只摘不贴
 	}
 
 	/**
@@ -1006,6 +1009,7 @@ export class TextPopupModal extends Modal {
 		this.filterInputEl?.toggleClass('is-no-match', !undetermined && this.matches.length === 0);
 		if (undetermined) {
 			this.updateTitle();
+			this.refreshHighlight(); // 退回未定态 = 命中集已空：只摘不贴（U7）
 			return;
 		}
 		const first = this.matches[0];
@@ -1013,14 +1017,93 @@ export class TextPopupModal extends Modal {
 			// 零命中：回到打开过滤时那一条，弹窗内容不动（卡片 A6）
 			if (this.index !== this.filterAnchor) this.show(this.filterAnchor);
 			else this.updateTitle();
+			this.refreshHighlight(); // 零命中时摘掉上一轮的 mark（U7）
 			return;
 		}
 		if (this.matches.includes(this.index)) {
-			// 已在命中集里：只更新计数，不重渲染（避免每敲一个字画面都闪）
+			// 已在命中集里：只更新计数，不重渲染（避免每敲一个字画面都闪）。
+			// 但条件变了、正文还是旧的那一屏 —— 高亮必须原地重贴（V124 §3.3）。
 			this.updateTitle();
+			this.refreshHighlight();
 			return;
 		}
 		if (first !== undefined) this.show(first);
+	}
+
+	// —— 命中高亮（V124，方案 [[Plan-20260925-163649]]）——
+	//
+	// 判据是「**搜索文本里命中** ≠ **屏幕上看得到**」：高亮只按演示 DOM 里可见的文本贴，
+	// 不去拿 `entry.text` 反查渲染产物（那份对齐又贵又脆）。于是三类文件型候选
+	// （image / canvas / excalidraw）天然不贴 —— 它们的命中源是文件名 / 别名，本来就不在正文里。
+
+	/** 这些容器里的文字不是「演示正文内容」，贴高亮要跳过：SVG（含 mermaid）、嵌入框架、表单、公式。 */
+	private static readonly HIGHLIGHT_SKIP =
+		'svg, iframe, input, textarea, mjx-container, .math, mark.text-popup-match';
+
+	/** 高亮用的令牌；没有命中集（未定态 / 零命中 / 没过滤）时为空 —— 只摘不贴。 */
+	private get highlightTokens(): string[] {
+		if (this.matches.length === 0) return [];
+		return queryTokens(parseFilterInput(this.filterValue, this.typePool).query);
+	}
+
+	/** 文件命中：搜索文本取自嵌入语法的文件名 / 别名，正文里没有对应文本，按卡片要求不贴（U3）。 */
+	private isFileHitEntry(index: number): boolean {
+		const type = this.filterEntries?.[index]?.type;
+		return type === 'image' || type === 'canvas' || type === 'excalidraw';
+	}
+
+	/** 条件变了就重贴一次当前屏（不是重渲染正文，见 §3.3）。`textEl` 为空时什么都不做。 */
+	private refreshHighlight(): void {
+		this.applyHighlight(this.textEl);
+	}
+
+	/**
+	 * 摘掉上一轮的高亮，再按当前令牌重贴。
+	 *
+	 * 「摘 → 贴」是幂等的：`unwrapHighlight` 会把文本节点合回去，所以反复调用不会累积碎片，
+	 * 也不必在条件变化时走 `show()` 重渲染（那会把 V123 花力气避开的闪烁请回来）。
+	 */
+	private applyHighlight(el: HTMLElement | null): void {
+		if (!el) return;
+		this.unwrapHighlight(el);
+		const tokens = this.highlightTokens;
+		if (tokens.length === 0) return;
+		if (this.isFileHitEntry(this.index)) return;
+
+		// 先把文本节点**全部收集**再统一改：边遍历边改会让 TreeWalker 走到自己刚插进去的节点上。
+		const doc = el.ownerDocument;
+		const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+		const texts: Text[] = [];
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			const text = node as Text;
+			if (!text.parentElement?.closest(TextPopupModal.HIGHLIGHT_SKIP)) texts.push(text);
+		}
+
+		for (const text of texts) {
+			const ranges = findMatchRanges(text.data, tokens);
+			if (ranges.length === 0) continue;
+			const fragment = doc.createDocumentFragment();
+			let cursor = 0;
+			for (const [start, end] of ranges) {
+				if (start > cursor) fragment.append(text.data.slice(cursor, start));
+				const mark = doc.createElement('mark');
+				mark.className = 'text-popup-match';
+				mark.textContent = text.data.slice(start, end);
+				fragment.append(mark);
+				cursor = end;
+			}
+			if (cursor < text.data.length) fragment.append(text.data.slice(cursor));
+			text.replaceWith(fragment);
+		}
+	}
+
+	/** 摘掉自己贴的 mark 并把切碎的文本节点合回去（幂等的地基）。 */
+	private unwrapHighlight(el: HTMLElement): void {
+		el.querySelectorAll('mark.text-popup-match').forEach((mark) =>
+			mark.replaceWith(...Array.from(mark.childNodes)),
+		);
+		// `replaceWith` 会把一段文本切成好几个相邻 Text 节点，不合并的话反复「摘 → 贴」会让节点数单调上涨。
+		el.normalize();
 	}
 
 	/** 在命中项之间移动（↑ / ↓ / Enter）。没有命中集时不动 —— 那时 ↑↓ 本来就无绑定。 */
@@ -1296,6 +1379,7 @@ export class TextPopupModal extends Modal {
 				}
 				// 判据用「有文本 或 有子元素」，覆盖「只渲染出一张图片、没有文字」的情况。
 				if (textEl.textContent?.trim() || textEl.childElementCount > 0) {
+					this.applyHighlight(textEl); // 在 fit 之前贴：mark 是 inline + padding 0，不改变行内盒
 					this.fitScaledContent(); // 先主动算一次；svg 晚到的那些由 fitObserver 补
 					return;
 				}
@@ -1308,6 +1392,7 @@ export class TextPopupModal extends Modal {
 		}
 		textEl.addClass('is-plain');
 		textEl.setText(body.plain);
+		this.applyHighlight(textEl);
 	}
 
 	/**

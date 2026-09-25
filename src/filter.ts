@@ -132,16 +132,65 @@ export function parseFilterInput(input: string, pool: readonly PopupEntryType[])
 }
 
 /**
+ * query → 令牌（小写、空格分词）。`matchEntries` 与高亮共用。
+ *
+ * 「同源」是硬要求（V124，方案 [[Plan-20260925-163649]] §2.4）：筛选与贴高亮各算一套分词，
+ * 迟早会出现「筛出来了却没高亮 / 没筛出来却高亮」。
+ */
+export function queryTokens(query: string): string[] {
+	return query
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((token) => token.toLowerCase());
+}
+
+/** 半开区间 `[start, end)`，下标落在**原串**上（DOM 切文本节点要用它）。 */
+export type MatchRange = [start: number, end: number];
+
+/**
+ * 一段可见文本里全部令牌的命中区间：按起点升序，重叠 / 相接者已合并。
+ *
+ * 小写化只在「长度不变」时可用 —— `İ`(U+0130) 这类字符会折成 2 个码元，长度一变返回的下标
+ * 就不再指向原串（切出来的字符会错位）。遇到就直接放弃这一段（V124 R2）。
+ */
+export function findMatchRanges(text: string, tokens: readonly string[]): MatchRange[] {
+	if (text === '' || tokens.length === 0) return [];
+	const lower = text.toLowerCase();
+	if (lower.length !== text.length) return [];
+	const ranges: MatchRange[] = [];
+	for (const token of tokens) {
+		if (!token) continue;
+		let from = 0;
+		while (from <= lower.length - token.length) {
+			const at = lower.indexOf(token, from);
+			if (at < 0) break;
+			ranges.push([at, at + token.length]);
+			from = at + token.length; // 不重叠前进：`aa` 在 `aaa` 里只收一处
+		}
+	}
+	if (ranges.length === 0) return [];
+	ranges.sort((a, b) => a[0] - b[0]);
+	const merged: MatchRange[] = [];
+	for (const range of ranges) {
+		const last = merged[merged.length - 1];
+		// 相接也合（`[0,2)` + `[2,3)` → `[0,3)`）：省一个空 mark，也少一次切分。
+		if (last && range[0] <= last[1]) {
+			last[1] = Math.max(last[1], range[1]);
+		} else {
+			merged.push([range[0], range[1]]);
+		}
+	}
+	return merged;
+}
+
+/**
  * 命中项在**全集**里的下标；空数组 = 没有过滤（调用方按全量处理）。
  *
  * 返回全集下标而不是过滤后的子数组：`show()` / `step()` / `updateTitle()` 都活在「全集」的
  * 坐标系里（弹窗的 index 就是全集下标），命中集只用来**约束**它。
  */
 export function matchEntries(entries: readonly PopupEntry[], filter: PopupFilter): number[] {
-	const tokens = filter.query
-		.split(/\s+/)
-		.filter(Boolean)
-		.map((token) => token.toLowerCase());
+	const tokens = queryTokens(filter.query);
 	const matches: number[] = [];
 	for (let i = 0; i < entries.length; i++) {
 		const entry = entries[i];
