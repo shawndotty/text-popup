@@ -1,6 +1,7 @@
 import { App, Component, MarkdownRenderer, Modal, Platform, Scope, setIcon } from 'obsidian';
 import {
 	availableTypes,
+	edgeIndex,
 	formatPopupTitle,
 	matchEntries,
 	parseFilterInput,
@@ -714,6 +715,16 @@ export class TextPopupModal extends Modal {
 		if (!Platform.isMobile) {
 			this.scope.register(null, '/', () => (this.filterOpen ? true : this.openFilter()));
 		}
+		// `[` / `]` 跳到可见范围的第一个 / 最后一个（V123 反馈四）。范围口径与 ← → ↑ ↓ 同源：
+		// 有命中就在命中集的两端，没有就退化成全集的两端 —— 所以「过滤后演示」（含过滤框仍开着、
+		// 但焦点已经移到正文的那种演示态）同样生效。
+		//
+		// 放行判据用**焦点**（而不是 ← → 那条 `filterOpen`）：这些键在过滤框里是正经的输入字符
+		// （搜 `@code array[0]`、`![[x.png]]` 这类查询都要打方括号），只有在「用户正在往输入框里
+		// 打字」时才必须让给输入框。焦点不在输入框时（含过滤框开着但用户点了正文去读）一律导航 ——
+		// 若照抄 `filterOpen`，那个演示态会变成一个按了没反应的死键。
+		this.scope.register(null, '[', () => (this.filterInputFocused ? true : this.jumpEdge('first')));
+		this.scope.register(null, ']', () => (this.filterInputFocused ? true : this.jumpEdge('last')));
 		// `Esc` 不在这里注册 —— 它走在键盘打开时压进去的那层子 scope 上（见 `filterScope`），
 		// 弹窗自己的 scope 上那条会被核心同 scope 的「Esc 关窗」先手。
 
@@ -834,6 +845,26 @@ export class TextPopupModal extends Modal {
 		const size = this.visibleSize();
 		if (size > 1) this.show(this.visibleAt((this.visiblePos() + delta + size) % size));
 		return false;
+	}
+
+	/**
+	 * 跳到可见范围的**两端**（`[` = 第一个、`]` = 最后一个，V123 反馈四）。
+	 *
+	 * 范围由 `edgeIndex` 收口（有命中走命中集两端、否则走全集两端），与 `step` / 计数同一个坐标系。
+	 * 已经在那一端时**不再重渲染**：`step` 无论如何都换到另一条，而这里停在第一条上按 `[` 是常态
+	 * —— 重渲染会白清滚动位置与视图缩放（`show` 会顺手把两者复位）。
+	 *
+	 * 返回 false 让核心 `preventDefault` + `stopPropagation`（与方向键同口径），方括号不会漏给编辑器。
+	 */
+	private jumpEdge(edge: 'first' | 'last'): false {
+		const target = edgeIndex(this.matches, this.source.size, edge);
+		if (target !== null && target !== this.index) this.show(target);
+		return false;
+	}
+
+	/** 光标是否在过滤输入框里 —— `[` / `]` 要不要让给输入框打字的判据（见 `onOpen` 的注册）。 */
+	private get filterInputFocused(): boolean {
+		return this.filterInputEl !== null && activeDocument.activeElement === this.filterInputEl;
 	}
 
 	/** 显示第 index 条：读内容 → 复位滚动 → 更新标题 → 重渲染。读取为空时保持当前内容不动。 */

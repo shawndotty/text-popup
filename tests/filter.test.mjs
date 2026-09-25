@@ -23,6 +23,7 @@ const jiti = createJiti(import.meta.url, {
 const {
 	TYPE_ORDER,
 	availableTypes,
+	edgeIndex,
 	entrySearchText,
 	entryTypeOf,
 	formatPopupTitle,
@@ -140,6 +141,44 @@ test('matchEntries: 返回的是全集下标（不是过滤后的子数组），
 		[0, 2],
 	);
 	assert.deepEqual(matchEntries([], { field: null, query: 'a' }), []);
+});
+
+/* ————————————————————————————————————————————————
+   edgeIndex（`[` / `]` 的落点）
+   ———————————————————————————————————————————————— */
+
+test('edgeIndex: 没有过滤时就是全集的两端', () => {
+	assert.equal(edgeIndex([], 5, 'first'), 0);
+	assert.equal(edgeIndex([], 5, 'last'), 4);
+	// 只有一条时两端重合（`show` 那边靠「已在端点就不重渲染」保证不白刷新）
+	assert.equal(edgeIndex([], 1, 'first'), 0);
+	assert.equal(edgeIndex([], 1, 'last'), 0);
+});
+
+test('edgeIndex: 有命中走命中集的两端（不是全集的两端）', () => {
+	// 命中第 2、4 条 → `[` 落到 1、`]` 落到 3，而不是 0 / 4
+	assert.equal(edgeIndex([1, 3], 5, 'first'), 1);
+	assert.equal(edgeIndex([1, 3], 5, 'last'), 3);
+	assert.equal(edgeIndex([2], 5, 'first'), 2);
+	assert.equal(edgeIndex([2], 5, 'last'), 2);
+});
+
+test('edgeIndex: 空范围返回 null（调用方什么都不做，别去 show 一个不存在的下标）', () => {
+	assert.equal(edgeIndex([], 0, 'first'), null);
+	assert.equal(edgeIndex([], 0, 'last'), null);
+});
+
+test('edgeIndex: 与 matchEntries 串起来 = 「过滤后的第一个 / 最后一个」', () => {
+	const entries = [
+		entry('quote', 'x'),
+		entry('table', 'ALPHA'),
+		entry('code', 'x'),
+		entry('table', 'BETA'),
+	];
+	const matches = matchEntries(entries, { field: 'table', query: '' });
+	assert.deepEqual(matches, [1, 3]);
+	assert.equal(edgeIndex(matches, entries.length, 'first'), 1);
+	assert.equal(edgeIndex(matches, entries.length, 'last'), 3);
 });
 
 /* ————————————————————————————————————————————————

@@ -158,6 +158,28 @@ export function matchEntries(entries: readonly PopupEntry[], filter: PopupFilter
 }
 
 /**
+ * 可见范围的**两端**在全集里的下标 —— `[`（第一个）/ `]`（最后一个）的落点。
+ *
+ * 范围口径与 `step` / ↑↓ / 计数完全同源：有命中（`matches.length > 0`）就走命中集，
+ * 否则退化成全集。返回 `null` = 范围是空的（没有候选），调用方什么都不该做 ——
+ * `show()` 拿不到落点会静默不动，把这个判据留在纯函数里才钉得住。
+ *
+ * 与 `modal.ts` 的 `visibleAt(pos)` 是同一件事的两个入口：那个吃任意 pos（给 step / ↑↓ 用），
+ * 这个只吃两端（给 `[` / `]` 用）。单独留一条的理由是「两端」正是本次要能用单测钉住的语义。
+ */
+export function edgeIndex(
+	matches: readonly number[],
+	size: number,
+	edge: 'first' | 'last',
+): number | null {
+	const filtered = matches.length > 0;
+	const total = filtered ? matches.length : size;
+	if (total <= 0) return null;
+	const pos = edge === 'first' ? 0 : total - 1;
+	return filtered ? (matches[pos] ?? null) : pos;
+}
+
+/**
  * 本篇实际出现的类型（去重，按 `TYPE_ORDER` 排序）。
  *
  * 「只列本篇出现的」是卡片的要求（A9）：一篇只有表格与图片的笔记，补全列表不该出现 `math`。
