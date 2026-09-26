@@ -29,6 +29,7 @@ const {
 	findMatchRanges,
 	formatPopupTitle,
 	matchEntries,
+	matchNavKey,
 	parseFilterInput,
 	queryTokens,
 	suggestAnchorLeft,
@@ -312,6 +313,30 @@ test('suggestAnchorLeft: 与 `@` 对齐，越界时夹进过滤框', () => {
 		0,
 		'弹层比过滤框还宽时退回 0（宁可左边贴边，也不出负数把它顶出框外）',
 	);
+});
+
+/* ————————————————————————————————————————————————
+   matchNavKey（V126：Shift+Enter = 上一个命中项，方案 [[Plan-20260926-103406]] §5.1）
+   ———————————————————————————————————————————————— */
+
+test('matchNavKey: ↑/↓ 与 Shift 无关（Shift 不影响既有映射）', () => {
+	assert.equal(matchNavKey('ArrowUp', false), 'prev');
+	assert.equal(matchNavKey('ArrowUp', true), 'prev');
+	assert.equal(matchNavKey('ArrowDown', false), 'next');
+	assert.equal(matchNavKey('ArrowDown', true), 'next');
+});
+
+test('matchNavKey: Enter = 下一个（锁住既有行为），Shift+Enter = 上一个（本次新增）', () => {
+	assert.equal(matchNavKey('Enter', false), 'next');
+	assert.equal(matchNavKey('Enter', true), 'prev');
+});
+
+test('matchNavKey: 非导航键返回 null（不误收 Tab / Esc / Ctrl+C 的 c）', () => {
+	assert.equal(matchNavKey('Tab', false), null);
+	assert.equal(matchNavKey('Escape', false), null);
+	assert.equal(matchNavKey('a', false), null);
+	// `Ctrl+C` 的 key 就是 'c'（修饰键在 modal.ts 那边另判），别被 matchNavKey 提前截走
+	assert.equal(matchNavKey('c', true), null);
 });
 
 /* ————————————————————————————————————————————————

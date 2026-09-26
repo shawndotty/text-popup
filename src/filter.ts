@@ -305,3 +305,22 @@ export function formatPopupTitle(
 	if (filtered) return `${name} · ${pos} / ${shown} · ${filteredLabel} (${total})`;
 	return total > 1 ? `${name} · ${pos} / ${total}` : name;
 }
+
+/** 过滤输入框（补全关闭时）的命中项导航动作。`Shift+Enter` 与 `↑` 同义 = 上一个。 */
+export type MatchNav = 'prev' | 'next';
+
+/**
+ * 输入框 keydown → 命中项导航动作；不导航返回 null。
+ *
+ * `↑`/`↓` 与 `Enter`（下一个）是既有映射；`Shift+Enter` 补成「上一个」—— 与 `↑` 同义，
+ * 方便不改手指位置地回看（V126）。`Enter` 与 `Shift+Enter` 共用一条分支，只取反 delta，
+ * 别写成两处各自 `moveMatch(±1)` 的魔法数。
+ *
+ * 刻意不把 `Tab` / `Ctrl+C` 之类纳进来：那些不是「命中项导航」，各有自己的分支。
+ */
+export function matchNavKey(key: string, shiftKey: boolean): MatchNav | null {
+	if (key === 'ArrowUp') return 'prev';
+	if (key === 'ArrowDown') return 'next';
+	if (key === 'Enter') return shiftKey ? 'prev' : 'next';
+	return null;
+}

@@ -5,6 +5,7 @@ import {
 	findMatchRanges,
 	formatPopupTitle,
 	matchEntries,
+	matchNavKey,
 	parseFilterInput,
 	queryTokens,
 	suggestAnchorLeft,
@@ -709,8 +710,12 @@ export class TextPopupModal extends Modal {
 		// modifiers 传 null = 不限修饰键，与内置图片 lightbox 的行为一致。
 		// 过滤态下 ← → 要归光标（输入框里移动光标），所以这里先放行 —— 返回 true = 不吞这个键，
 		// 交给浏览器把事件送到聚焦的输入框上（Plan §6 键盘矩阵）。
-		this.scope.register(null, 'ArrowLeft', () => (this.filterOpen ? true : this.step(-1)));
-		this.scope.register(null, 'ArrowRight', () => (this.filterOpen ? true : this.step(1)));
+		//
+		// 放行判据用**焦点**（`filterInputFocused`，与下方 `[`/`]` 同一口径），而不是可见状态
+		// `filterOpen`：过滤框开着但焦点已移到正文时（用户点正文去读）仍要导航 —— 若照抄
+		// `filterOpen`，那一刻没人接这个键，`←`/`→` 会变成一个按了没反应的死键（V126 修复）。
+		this.scope.register(null, 'ArrowLeft', () => (this.filterInputFocused ? true : this.step(-1)));
+		this.scope.register(null, 'ArrowRight', () => (this.filterInputFocused ? true : this.step(1)));
 
 		// 过滤模式（V123）：`/` 唤起、`Esc` 收起。
 		// `/` 一期只在桌面注册：移动端没有物理键盘，软键盘会遮掉半屏（Discuss Q1）。
@@ -721,10 +726,10 @@ export class TextPopupModal extends Modal {
 		// 有命中就在命中集的两端，没有就退化成全集的两端 —— 所以「过滤后演示」（含过滤框仍开着、
 		// 但焦点已经移到正文的那种演示态）同样生效。
 		//
-		// 放行判据用**焦点**（而不是 ← → 那条 `filterOpen`）：这些键在过滤框里是正经的输入字符
+		// 放行判据用**焦点**（与 ← → 同一口径）：这些键在过滤框里是正经的输入字符
 		// （搜 `@code array[0]`、`![[x.png]]` 这类查询都要打方括号），只有在「用户正在往输入框里
 		// 打字」时才必须让给输入框。焦点不在输入框时（含过滤框开着但用户点了正文去读）一律导航 ——
-		// 若照抄 `filterOpen`，那个演示态会变成一个按了没反应的死键。
+		// 若用 `filterOpen`，那个演示态会变成一个按了没反应的死键。
 		this.scope.register(null, '[', () => (this.filterInputFocused ? true : this.jumpEdge('first')));
 		this.scope.register(null, ']', () => (this.filterInputFocused ? true : this.jumpEdge('last')));
 		// `Esc` 不在这里注册 —— 它走在键盘打开时压进去的那层子 scope 上（见 `filterScope`），
@@ -1106,7 +1111,7 @@ export class TextPopupModal extends Modal {
 		el.normalize();
 	}
 
-	/** 在命中项之间移动（↑ / ↓ / Enter）。没有命中集时不动 —— 那时 ↑↓ 本来就无绑定。 */
+	/** 在命中项之间移动（↑ / ↓ / Enter / Shift+Enter）。没有命中集时不动 —— 那时 ↑↓ 本来就无绑定。 */
 	private moveMatch(delta: number): void {
 		const size = this.matches.length;
 		if (size === 0) return;
@@ -1267,7 +1272,8 @@ export class TextPopupModal extends Modal {
 	/**
 	 * 输入框自己的 keydown。
 	 *
-	 * 顺序即优先级：补全打开时 ↑↓/Enter/Tab 全归补全；否则 ↑↓ 走命中项、Enter 跳下一个命中项。
+	 * 顺序即优先级：补全打开时 ↑↓/Enter/Tab 全归补全；否则 ↑↓ 走命中项、Enter 下一个、
+	 * `Shift+Enter` 上一个（见 `matchNavKey`）。
 	 * `Esc` **不在这里处理** —— 让它冒泡到弹窗 scope 上统一判「关补全 / 收过滤框 / 关弹窗」。
 	 */
 	private onFilterKeyDown = (evt: KeyboardEvent): void => {
@@ -1292,14 +1298,10 @@ export class TextPopupModal extends Modal {
 				return;
 			}
 		}
-		if (evt.key === 'ArrowUp') {
+		const nav = matchNavKey(evt.key, evt.shiftKey);
+		if (nav !== null) {
 			evt.preventDefault();
-			this.moveMatch(-1);
-			return;
-		}
-		if (evt.key === 'ArrowDown' || evt.key === 'Enter') {
-			evt.preventDefault();
-			this.moveMatch(1);
+			this.moveMatch(nav === 'prev' ? -1 : 1);
 			return;
 		}
 		if (evt.ctrlKey || evt.metaKey) {
