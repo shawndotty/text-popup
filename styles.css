@@ -369,13 +369,24 @@
 }
 
 /* 节点盒：与核心 .canvas-node-container 同口径（白底 + 主题色描边 + 圆角 + 裁掉溢出）。
-   坐标 / 尺寸由 canvas.ts 写内联 style（画布坐标 px）。 */
+   坐标 / 尺寸由 canvas.ts 写内联 style（画布坐标 px）。
+
+   V128：纵向居中 —— 复刻核心画布「文字不足节点高时居中、内容多时从上排」的效果。
+   为什么这一条就够：节点盒高度由 canvas.ts 写死（placeBox），内容元素是它**唯一**的子元素，
+   把节点变成 flex column 之后，「唯一的那个项」天然就是内容本身，不需要核心那层 sizer。
+   为什么必须带 safe：不写 safe 时内容超高会把第一行顶出上边界（配合 overflow: hidden
+   就是「顶部被裁」）—— 核心用伪元素弹簧 + min-height 绕开的就是这个坑，safe 是它的直接等价物。
+   不支持 safe 的环境会整条丢弃这条声明，行为退回 V127（从上排），不会更差。
+   前提：内容元素（.text-popup-canvas-node-content）是这个节点盒的唯一子元素。 */
 .mod-text-popup .text-popup-canvas-node {
 	position: absolute;
 	background: var(--background-primary);
 	border: 1px solid var(--canvas-color);
 	border-radius: var(--radius-m);
 	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	justify-content: safe center;
 }
 
 /* 节点内容：字号**固定** 16px（= 画布坐标 1:1），不跟随弹窗字号 ——
