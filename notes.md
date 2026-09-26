@@ -1,1 +1,2 @@
-- fix external link convert bug
+- when exit popup view, the note will scroll to the position of the showed block
+- user can turn on or off this feature in setting
