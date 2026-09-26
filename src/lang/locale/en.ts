@@ -51,6 +51,10 @@ export default {
 	'Popup font size': 'Popup font size',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+	'On close': 'On close',
+	'Locate the viewed block': 'Locate the viewed block',
+	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
+		'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.',
 	'Block wrappers': 'Block wrappers',
 	'Supported tags': 'Supported tags',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':

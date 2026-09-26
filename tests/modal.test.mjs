@@ -46,21 +46,28 @@
  * 每格跳一次、跳的距离精确等于上一格的 pan —— 只在「内容放大后仍装得下」的轴上现形，图片因为
  * 恰好铺满一屏、补偿全由滚动承担，所以观感上不抖。这里钉住「放得下 → 滚动全担 / 放不下 → 滚动写 0、
  * 整段交给平移」这两个分支，以及两分支的落位必须一致；「判据 `q` 逐格恒定」只能真机量。
+ *
+ * ⑧ `clampBlockLine` / `findMarkdownView` —— V127「关闭弹窗时定位到浏览的块」
+ * （2026-09-26，方案 [[Plan-20260926-180807]] §3.2）。这里钉住「行号夹取」与「选哪个视图」
+ * 两层判据；真正的滚动落点依赖真实布局与真实 `Workspace`，只能真机 eval 量（见该方案 §5.2）。
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createJiti } from 'jiti';
+import { MarkdownView } from './stubs/obsidian.mjs';
 
 const jiti = createJiti(import.meta.url, {
 	moduleCache: false,
 	alias: { obsidian: new URL('./stubs/obsidian.mjs', import.meta.url).pathname },
 });
 const {
+	clampBlockLine,
 	clampScroll,
 	clickZoomTarget,
 	easeOutCubic,
 	elementPoint,
+	findMarkdownView,
 	headingColorVariables,
 	resolveViewFrame,
 	scrollToMove,
@@ -730,3 +737,86 @@ test('swipeDirection：maxScroll = 0 时（内容比画布窄）不受边界约�
 	assert.equal(swipeDirection(start, { x: 200, y: 200 }), -1);
 	assert.equal(swipeDirection(start, { x: 0, y: 200 }), 1);
 });
+
+// —— V127：关闭弹窗时定位到浏览的块（方案 [[Plan-20260926-180807]] §3.2 / §5.1） ——
+
+test('clampBlockLine：够得着的行号原样通过（含第 0 行）', () => {
+	assert.equal(clampBlockLine(5, 10), 5, '中间行不动');
+	assert.equal(clampBlockLine(0, 10), 0, '第 0 行是合法行号，不能被当成空值');
+	assert.equal(clampBlockLine(9, 10), 9, '最后一行原样');
+});
+
+test('clampBlockLine：越界收到最后一行', () => {
+	assert.equal(clampBlockLine(10, 10), 9, '正好越界（lineCount 是行数，合法行号到 lineCount-1）');
+	assert.equal(clampBlockLine(99, 10), 9, '远越界也收到最后一行');
+});
+
+test('clampBlockLine：负数与非有限值兜底到 0', () => {
+	assert.equal(clampBlockLine(-3, 10), 0, '负数收到第 0 行');
+	assert.equal(clampBlockLine(NaN, 10), 0, 'NaN 兜底');
+	assert.equal(clampBlockLine(Infinity, 10), 0, 'Infinity 兜底');
+});
+
+test('clampBlockLine：空文档不产生负行号', () => {
+	assert.equal(clampBlockLine(3, 0), 0, 'lineCount 为 0 时返回 0');
+});
+
+test('findMarkdownView：没有路径不猜', () => {
+	assert.equal(findMarkdownView(fakeApp([]), ''), null);
+});
+
+test('findMarkdownView：主窗口里打开的目标笔记返回它的视图', () => {
+	const a = fakeView('A.md');
+	assert.equal(findMarkdownView(fakeApp([a]), 'A.md'), a);
+});
+
+test('findMarkdownView：同一笔记两个窗格时优先活动窗格（分屏口径）', () => {
+	const first = fakeView('A.md');
+	const second = fakeView('A.md');
+	assert.equal(
+		findMarkdownView(fakeApp([first, second], second), 'A.md'),
+		second,
+		'活动窗格在列表里时返回它',
+	);
+	assert.equal(
+		findMarkdownView(fakeApp([first, second], null), 'A.md'),
+		first,
+		'没有活动窗格时退回找到的第一个',
+	);
+	assert.equal(
+		findMarkdownView(fakeApp([first, second], fakeView('B.md')), 'A.md'),
+		first,
+		'活动窗格是别的笔记时不误用',
+	);
+});
+
+test('findMarkdownView：目标笔记没打开时返回 null（不替用户打开笔记）', () => {
+	const b = fakeView('B.md');
+	assert.equal(findMarkdownView(fakeApp([b], b), 'A.md'), null);
+});
+
+test('findMarkdownView：非 Markdown 视图（或没有 file）不参与匹配', () => {
+	const noFile = new MarkdownView();
+	const a = fakeView('A.md');
+	assert.equal(findMarkdownView(fakeApp([noFile, a], a), 'A.md'), a, '跳过没有 file 的视图');
+	// 桩里没有别的视图类，用一个普通对象模拟「leaf.view 不是 MarkdownView」
+	const foreign = { file: { path: 'A.md' } };
+	assert.equal(findMarkdownView(fakeApp([foreign], null), 'A.md'), null, 'instanceof 认不过就跳过');
+});
+
+/** 造一个带 file.path 的最小 MarkdownView（桩是空类，`instanceof` 可用）。 */
+function fakeView(path) {
+	const view = new MarkdownView();
+	view.file = { path };
+	return view;
+}
+
+/** 最小假 app：`getLeavesOfType('markdown')` 与 `getActiveViewOfType` 是 `findMarkdownView` 唯一用到的两个。 */
+function fakeApp(views, active = null) {
+	return {
+		workspace: {
+			getLeavesOfType: () => views.map((view) => ({ view })),
+			getActiveViewOfType: (type) => (active instanceof type ? active : null),
+		},
+	};
+}

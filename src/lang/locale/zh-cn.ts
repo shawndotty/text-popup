@@ -50,6 +50,10 @@ const zhCN: Partial<typeof en> = {
 	'Popup font size': '弹窗字号',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'弹窗内文字的默认字号，单位为像素。弹窗内还可以临时调整。',
+	'On close': '关闭弹窗时',
+	'Locate the viewed block': '定位到正在浏览的块',
+	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
+		'关闭放大弹窗时，把笔记滚动到你正在浏览的那个块的起始行（不移动光标）。',
 	'Block wrappers': '区块包裹',
 	'Supported tags': '支持的标签',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':

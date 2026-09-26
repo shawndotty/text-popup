@@ -17,6 +17,8 @@ export interface TextPopupSettings {
 	enabled: boolean;
 	/** 弹窗内渲染块里的 HTML 与 Markdown；关闭则按纯文本显示。 */
 	renderRichText: boolean;
+	/** 关闭放大弹窗时，把笔记滚动到正在浏览的那个块的起始行（不移动光标，V127）。 */
+	locateOnClose: boolean;
 	/** 弹窗背景色；空字符串表示跟随主题。 */
 	popupBackgroundColor: string;
 	/** 弹窗文字颜色；空字符串表示跟随主题。 */
@@ -45,6 +47,7 @@ interface LegacySettings extends Partial<TextPopupSettings> {
 export const DEFAULT_SETTINGS: TextPopupSettings = {
 	enabled: true,
 	renderRichText: true,
+	locateOnClose: true,
 	popupBackgroundColor: '',
 	popupTextColor: '',
 	popupFontSize: 16,
@@ -146,6 +149,10 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 			typeof data.renderRichText === 'boolean'
 				? data.renderRichText
 				: DEFAULT_SETTINGS.renderRichText,
+		locateOnClose:
+			typeof data.locateOnClose === 'boolean'
+				? data.locateOnClose
+				: DEFAULT_SETTINGS.locateOnClose,
 		popupBackgroundColor: readString(
 			data.popupBackgroundColor,
 			DEFAULT_SETTINGS.popupBackgroundColor,
@@ -176,6 +183,7 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 export type SettingKey =
 	| 'enabled'
 	| 'renderRichText'
+	| 'locateOnClose'
 	| 'blockKinds.code'
 	| 'blockKinds.callout'
 	| 'blockKinds.math'
@@ -272,6 +280,8 @@ export function writeSettingValue(
 			return assign(settings, 'enabled', value === true);
 		case 'renderRichText':
 			return assign(settings, 'renderRichText', value === true);
+		case 'locateOnClose':
+			return assign(settings, 'locateOnClose', value === true);
 		case 'popupFontSize':
 			return assign(settings, 'popupFontSize', clampFontSize(value));
 		case 'multiLineTag':
@@ -526,6 +536,19 @@ export class TextPopupSettingTab extends PluginSettingTab {
 							step: FONT_SIZE_STEP,
 							defaultValue: DEFAULT_SETTINGS.popupFontSize,
 						},
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: t('On close'),
+				items: [
+					{
+						name: t('Locate the viewed block'),
+						desc: t(
+							'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.',
+						),
+						control: { type: 'toggle', key: 'locateOnClose' },
 					},
 				],
 			},

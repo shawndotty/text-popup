@@ -199,6 +199,11 @@ function buildPopupSession(
 			},
 			// 过滤用：每条候选的类型与可搜索文本；长度恒等于 size（缺了就按「不可过滤」处理）。
 			entries,
+			// V127：候选 → 源笔记行号。数据面只吐行号 —— 滚不滚、怎么滚是弹窗（与设置）的事，
+			// 与 `read` 只吐内容、不关心渲染是同一条分层。
+			blockStartLine(index: number): number | null {
+				return candidates[index]?.region.startLine ?? null;
+			},
 			dispose(): void {
 				measureEl?.remove();
 			},

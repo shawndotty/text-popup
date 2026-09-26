@@ -530,3 +530,38 @@ test('包裹标签下拉永远包含当前值 —— 否则 <select> 会显示�
 	settings.multiLineTag = 'section';
 	assert.deepEqual(Object.keys(tagDropdownOptions(settings, 'multiLineTag')), ['p', 'section']);
 });
+
+// —— V127：关闭弹窗时定位到浏览的块（方案 [[Plan-20260926-180807]] §3.3 / §5.1） ——
+
+test('locateOnClose：默认开（需求原文就是「我希望…可以直接定位到」）', () => {
+	assert.equal(DEFAULT_SETTINGS.locateOnClose, true);
+	assert.equal(normalizeSettings({}).locateOnClose, true, '空数据');
+});
+
+test('locateOnClose：老 data.json 无此键时自动补默认，不需要迁移脚本', () => {
+	const settings = normalizeSettings({ enabled: false, popupFontSize: 20 });
+	assert.equal(settings.locateOnClose, true, '缺键回落默认');
+});
+
+test('locateOnClose：显式 false 被保留，非布尔值回落默认', () => {
+	assert.equal(normalizeSettings({ locateOnClose: false }).locateOnClose, false, '关掉的开关要留住');
+	assert.equal(normalizeSettings({ locateOnClose: 'yes' }).locateOnClose, true, '字符串不采纳');
+	assert.equal(normalizeSettings({ locateOnClose: 0 }).locateOnClose, true, '数字不采纳');
+});
+
+test('locateOnClose：读写往返一致，同值重复写返回 false（不触发保存）', () => {
+	const settings = normalizeSettings({});
+	assert.equal(readSettingValue(settings, 'locateOnClose'), true, '播种默认值');
+	assert.equal(writeSettingValue(settings, 'locateOnClose', false), true, '改值返回 true');
+	assert.equal(settings.locateOnClose, false);
+	assert.equal(readSettingValue(settings, 'locateOnClose'), false, '读回改动后的值');
+	assert.equal(writeSettingValue(settings, 'locateOnClose', false), false, '同值重复写返回 false');
+	// 非布尔值一律落成 false（与 enabled / renderRichText 同一条 `value === true`）
+	assert.equal(writeSettingValue(settings, 'locateOnClose', 'yes'), false, '当前已 false → 不改动');
+	assert.equal(writeSettingValue(settings, 'locateOnClose', true), true, '改成 true');
+	assert.equal(settings.locateOnClose, true);
+});
+
+test('locateOnClose：只保存，不刷新图标、不重建定义', () => {
+	assert.deepEqual([...settingSideEffects('locateOnClose')], []);
+});

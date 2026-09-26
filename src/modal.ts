@@ -1,4 +1,13 @@
-import { App, Component, MarkdownRenderer, Modal, Platform, Scope, setIcon } from 'obsidian';
+import {
+	App,
+	Component,
+	MarkdownRenderer,
+	MarkdownView,
+	Modal,
+	Platform,
+	Scope,
+	setIcon,
+} from 'obsidian';
 import {
 	availableTypes,
 	edgeIndex,
@@ -371,6 +380,41 @@ export function swipeDirection(
 }
 
 /**
+ * 把块起始行夹进「这份笔记当前的行范围」（V127）。
+ *
+ * 快照行号在「退出浏览」这一刻通常仍然有效（弹窗是模态，打开期间编辑器收不到输入；
+ * 外部改动是唯一例外，见方案 [[Plan-20260926-180807]] §3.4-2），但笔记被外部改短时也要有个
+ * 确定结果 —— 夹取一下，宁可落到最后一行，也不要把越界行写进编辑器状态。
+ *
+ * 抽成纯函数是为了能被 `tests/modal.test.mjs` 直接喂假值钉住 —— 与本文件其它几何 / 判据
+ * 函数同一条理由：没有能跑真实布局的 DOM 环境，只能把判据本身钉住。
+ */
+export function clampBlockLine(line: number, lineCount: number): number {
+	if (!Number.isFinite(line) || lineCount <= 0) return 0;
+	return Math.min(Math.max(0, Math.floor(line)), lineCount - 1);
+}
+
+/**
+ * 找 `path` 这篇笔记的 Markdown 视图；找不到返回 null（V127）。
+ *
+ * 同笔记开在多个窗格（分屏）时优先**活动窗格**：弹窗是模态，打开期间活动窗格不会变，
+ * 所以它基本就是当初点开图标的那一个。都不匹配时才退回「找到的第一个」——
+ * 定位到同一篇笔记的另一个窗格不影响正确性，只是不是用户正看着的那一个。
+ */
+export function findMarkdownView(app: App, path: string): MarkdownView | null {
+	if (!path) return null;
+	const matches: MarkdownView[] = [];
+	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+		const view = leaf.view;
+		if (view instanceof MarkdownView && view.file?.path === path) matches.push(view);
+	}
+	if (matches.length === 0) return null;
+	const active = app.workspace.getActiveViewOfType(MarkdownView);
+	if (active && matches.includes(active)) return active;
+	return matches[0] ?? null;
+}
+
+/**
  * 系统开了「减少动态效果」时不做过渡。动画纯属观感，用户显式关掉就该直接给结果；
  * 这条分支同时也是「瞬时跳变」这套旧行为的回归路径。
  */
@@ -415,6 +459,14 @@ export interface TextPopupSource {
 	 * 计数与导航完全保持今天的行为。这样测试桩与自造 source 一行都不用改。
 	 */
 	entries?: readonly PopupEntry[];
+	/**
+	 * 第 index 条候选在**源笔记文本**里的起始行（V127：关闭弹窗时把笔记定位过去）。
+	 *
+	 * **可选**：缺省时弹窗不做定位 —— 与 `entries` 同一套策略（老测试桩 / 自造 source
+	 * 一行都不用改）。行号就是扫描时的 `TextBlockRegion.startLine`，与「点开的是第几个块」
+	 * 共用同一份快照。
+	 */
+	blockStartLine?(index: number): number | null;
 	/** 会话结束时的清理（例如移除离屏宿主）；实现方可选。 */
 	dispose?(): void;
 }
@@ -811,8 +863,32 @@ export class TextPopupModal extends Modal {
 		this.fitObserver?.disconnect();
 		this.fitObserver = null;
 		activeWindow.removeEventListener('resize', this.resizeHandler);
+		// V127：把笔记定位回「刚才浏览的那个块」。放最后一步 —— 该解绑的监听、该断开的
+		// 观察器都已经断完，滚动带来的重排不会再惊动弹窗自己的逻辑（fitObserver / 过渡帧）。
+		this.locateOnClose();
 		// 移除离屏宿主，不留游离节点
 		this.source.dispose?.();
+	}
+
+	/**
+	 * 关闭时把源笔记定位回「刚才浏览的那个块」（V127，设置里可关）。
+	 *
+	 * 只做**视图定位**（把块滚进视口），**不动光标** —— 取舍见方案 [[Plan-20260926-180807]] §3.4-1：
+	 * 光标进块会让实时预览把该块展开成源码（iframe / 手写 HTML 当场摊开，右上角放大图标也消失），
+	 * 与插件在点图标时就 `preventDefault` 拦下光标跳转的既有取向相反。
+	 *
+	 * 三个前置条件缺一不可：开关开着、source 给出了起始行、那篇笔记的视图还开着；
+	 * 缺任何一个就什么都不做（需求是「回到原笔记」，笔记已经不在了却替用户重开一篇是越权）。
+	 */
+	private locateOnClose(): void {
+		if (!this.settings.locateOnClose) return;
+		const startLine = this.source.blockStartLine?.(this.index);
+		if (startLine === null || startLine === undefined) return;
+		const view = findMarkdownView(this.app, this.source.sourcePath);
+		if (!view) return;
+		const line = clampBlockLine(startLine, view.editor.lineCount());
+		// center = true：块可能正好贴在视口边缘，「定位」要的是一眼看得见它
+		view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
 	}
 
 	/**

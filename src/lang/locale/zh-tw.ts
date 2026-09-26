@@ -51,6 +51,10 @@ const zhTW: Partial<typeof en> = {
 	'Popup font size': '彈窗字型大小',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'彈窗內文字的預設字型大小，單位為像素。彈窗內還可以臨時調整。',
+	'On close': '關閉彈窗時',
+	'Locate the viewed block': '定位到正在瀏覽的區塊',
+	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
+		'關閉放大彈窗時，把筆記捲動到你正在瀏覽的那個區塊的起始行（不移動游標）。',
 	'Block wrappers': '區塊包裹',
 	'Supported tags': '支援的標籤',
 	'Only applies to hand-written block-level HTML. Separate tags with commas, for example div, p. Changes take effect immediately, no code change needed.':
