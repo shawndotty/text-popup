@@ -3,6 +3,7 @@
  *
  * 单趟扫描 + 递归：只动认得的标签，其余字节原样透传（畸形 HTML 不修复、不猜）。
  * 别的标签一律**原样保留**：不认识的标签不猜、不删（非破坏性原则）。
+ * `<a href="…">` 因带属性装不进「标记包裹」规则表，与列表 / 表格 / 标题一样特判（见 `readLinkElement`）。
  * 刻意不引入 DOM / `sanitizeHTMLToDom`：那会净化属性，把用户写的 `<span style="…">` 改掉。
  *
  * 本文件整体保留为一个模块：`convertInlineBack` 递归调用 `readListElement` / `readTableElement` /
@@ -212,6 +213,34 @@ function tagAttributes(raw: string): string {
 	return raw
 		.replace(/^<\s*\/?\s*[a-zA-Z][a-zA-Z0-9-]*/, '')
 		.replace(/\/?>$/, '');
+}
+
+/** 从标签原文里读 `href` 值（容忍 `"…"` / `'…'` / 裸值三种写法），解码实体；没有则返回 null。 */
+function readHref(raw: string): string | null {
+	const match = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tagAttributes(raw));
+	if (!match) return null;
+	return decodeEntities(match[1] ?? match[2] ?? match[3] ?? '');
+}
+
+/**
+ * 解析一个带 `href` 的 `<a>` → `[文字](URL)`；没有 `href` 或找不到配对的 `</a>` 时返回 null，
+ * 由调用方按「未知标签」原样保留（不猜、不降级）。
+ *
+ * 只保留 `href`，`class` / `target` / `rel` 一并丢弃 —— 与其它行内标签「属性被丢弃」一致；
+ * 本插件自己产出的 `<a>` 只有 href，往返因此无损。文字走同一套行内还原（`<a><strong>x</strong></a>` → `[**x**](u)`）。
+ */
+function readLinkElement(text: string, at: number): { markdown: string; end: number } | null {
+	const head = readTag(text, at);
+	if (!head || head.closing || head.name !== 'a') return null;
+
+	const href = readHref(head.raw);
+	if (href === null) return null;
+
+	const close = readClosingTag(text, 'a', at + head.raw.length);
+	if (!close) return null;
+
+	const inner = convertInlineBack(text.slice(at + head.raw.length, close.start));
+	return { markdown: `[${inner}](${href})`, end: close.end };
 }
 
 /** 从属性串里读 `align`；没写、或 `justify` 这类 Markdown 表达不了的一律返回 null。 */
@@ -509,6 +538,16 @@ function convertInlineBack(text: string): string {
 			out += text.slice(at, end);
 			index = end;
 			continue;
+		}
+
+		if (tag && !tag.closing && tag.name === 'a') {
+			const link = readLinkElement(text, at);
+			if (link) {
+				out += link.markdown;
+				index = link.end;
+				continue;
+			}
+			// 没有 href / 缺配对闭标签：落到下面的「未知标签」处理，原样保留
 		}
 
 		const rule = tag ? BACKWARD_RULES[tag.name] : undefined;

@@ -50,11 +50,21 @@ export function escapeText(text: string): string {
 		.replace(/</g, '&lt;');
 }
 
+/**
+ * 属性值转义：写进 `href` 前把会被 HTML 解析器误读的四个字符全转掉。
+ *
+ * 与 `escapeText` 分开：这里不能「宁可不转」（属性值里的 `&` / `"` 会截断属性或改变 URL），
+ * 必须四个字符都处理；反向由 `readHref` 的 `decodeEntities` 还原（`"` 因此要在反查表里）。
+ */
+export function escapeAttribute(value: string): string {
+	return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 /** 转义表反查；单趟 `replace` 保证 `&amp;lt;` 不会被折叠两级。 */
-export const ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&' };
+export const ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&', quot: '"' };
 
 export function decodeEntities(text: string): string {
-	return text.replace(/&(lt|gt|amp);/gi, (match: string, name: string) => ENTITIES[name.toLowerCase()] ?? match);
+	return text.replace(/&(lt|gt|amp|quot);/gi, (match: string, name: string) => ENTITIES[name.toLowerCase()] ?? match);
 }
 
 /** 表格对齐；`null` = 没指定（Markdown 的分隔行不写冒号）。 */

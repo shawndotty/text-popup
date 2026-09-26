@@ -1,21 +1,25 @@
 /**
  * 正向行内转换（Markdown 行内 → HTML 行内）。
  *
- * 三类片段分流：已知的完整标签原样透传、行内代码转 `<code>`、其余文本走强调标记 + 最小转义。
- * `[[笔记]]` / `[t](u)` / `![[img]]` / `$x$` 有意不转：留原文时弹窗的 `MarkdownRenderer`
- * 能渲染成可点击的内部链接与图片，转成裸 `<a>` 反而会丢掉交互。
+ * 三类片段分流：已知的完整标签原样透传、行内代码转 `<code>`、其余文本走行内规则（强调 + 绝对 URL 链接）+ 最小转义。
+ * `[[笔记]]` / `![[img]]` / `$x$` / **相对链接**（`[t](u)`）有意不转：留原文时弹窗的 `MarkdownRenderer`
+ * 能渲染成可点击的内部链接与图片，转成裸 `<a>` 反而会丢掉交互。只有带 scheme 的**绝对 URL 链接**
+ * （`[文字](https://…)` 与 `<https://…>` autolink）转成真 `<a>`：它在编辑器 / 阅读视图 / 导出里都一致可点。
  */
 
-import { escapeText, readTag } from './shared';
+import { escapeAttribute, escapeText, readTag } from './shared';
 
 /**
- * 强调标记 → HTML 的唯一一条规则（六个捕获组：粗体 ×2、斜体 ×2、高亮、删除线）。
+ * 行内规则 → HTML 的唯一一条正则：六个强调捕获组（粗体 ×2、斜体 ×2、高亮、删除线）+ 一组链接（第 7/8 组）。
  * 一趟扫完，不能拆成多趟：多趟之间字符串里已经出现了自己生成的标签，后一趟的转义会把它们弄坏。
+ *
+ * 链接当作强调的**兄弟分支**（而不是 `convertInline` 顶层的第三种触发字符），递归才能自然处理
+ * `**<a>**` / `[**粗**](u)` 这类嵌套。dest 必须带 scheme 才命中：相对链接 / 内链 / 嵌入一律留原文。
  */
-const EMPHASIS_SOURCE =
-	/\*\*(?=\S)([\s\S]*?\S)\*\*|(?<![\w])__(?=\S)([\s\S]*?\S)__(?![\w])|(?<!\*)\*(?=\S)([\s\S]*?\S)\*(?!\*)|(?<![\w])_(?=\S)([\s\S]*?\S)_(?![\w])|==(?=\S)([\s\S]*?\S)==|~~(?=\S)([\s\S]*?\S)~~/g;
+const INLINE_SOURCE =
+	/\*\*(?=\S)([\s\S]*?\S)\*\*|(?<![\w])__(?=\S)([\s\S]*?\S)__(?![\w])|(?<!\*)\*(?=\S)([\s\S]*?\S)\*(?!\*)|(?<![\w])_(?=\S)([\s\S]*?\S)_(?![\w])|==(?=\S)([\s\S]*?\S)==|~~(?=\S)([\s\S]*?\S)~~|(?<!!)\[([^[\]]*)\]\(([A-Za-z][A-Za-z0-9+.-]*:[^()\s]*)\)/g;
 
-/** 与 EMPHASIS_SOURCE 的捕获组一一对应：粗体 ×2、斜体 ×2、高亮、删除线。 */
+/** 与 INLINE_SOURCE 的前六个捕获组一一对应：粗体 ×2、斜体 ×2、高亮、删除线。 */
 const WRAPPERS: ReadonlyArray<readonly [string, string]> = [
 	['<strong>', '</strong>'],
 	['<strong>', '</strong>'],
@@ -25,14 +29,25 @@ const WRAPPERS: ReadonlyArray<readonly [string, string]> = [
 	['<del>', '</del>'],
 ];
 
-/** 把一条命中的强调标记包成 HTML，内部递归转换（`**粗 *斜* 体**` 这类嵌套也能落地）。 */
-function wrapEmphasis(match: RegExpExecArray): string {
+/** 链接组在 INLINE_SOURCE 里的捕获组号（强调占 1–6）。 */
+const LINK_TEXT_GROUP = WRAPPERS.length + 1;
+const LINK_DEST_GROUP = WRAPPERS.length + 2;
+
+/** 把一条命中的规则包成 HTML，内部递归转换（`**粗 *斜* 体**` / `[**粗**](u)` 这类嵌套也能落地）。 */
+function wrapMatch(match: RegExpExecArray): string {
 	for (let index = 0; index < WRAPPERS.length; index++) {
 		const inner = match[index + 1];
 		const wrapper = WRAPPERS[index];
 		if (inner === undefined || !wrapper) continue;
 		return `${wrapper[0]}${convertInline(inner)}${wrapper[1]}`;
 	}
+
+	const text = match[LINK_TEXT_GROUP];
+	const dest = match[LINK_DEST_GROUP];
+	if (text !== undefined && dest !== undefined) {
+		return `<a href="${escapeAttribute(dest)}">${convertInline(text)}</a>`;
+	}
+
 	return match[0];
 }
 
@@ -51,11 +66,19 @@ export function convertInline(text: string): string {
 			if (tag) {
 				out += tag.raw;
 				index += tag.raw.length;
-			} else {
-				// 裸 `<`（如 `a < b`）：转义，避免被当成标签开头
-				out += '&lt;';
-				index += 1;
+				continue;
 			}
+
+			const autolink = readAutolink(text, index);
+			if (autolink) {
+				out += `<a href="${escapeAttribute(autolink.href)}">${escapeText(autolink.label)}</a>`;
+				index = autolink.end;
+				continue;
+			}
+
+			// 裸 `<`（如 `a < b`）：转义，避免被当成标签开头
+			out += '&lt;';
+			index += 1;
 			continue;
 		}
 
@@ -105,20 +128,50 @@ function readCodeSpan(text: string, at: number): CodeSpan | null {
 	return { code: text.slice(at + length, close), end: close + length };
 }
 
-/** 普通文本片段：强调标记转 HTML，其余部分最小转义。 */
+/** 普通文本片段：行内规则（强调 + 绝对 URL 链接）转 HTML，其余部分最小转义。 */
 function convertPlainRun(text: string): string {
 	// 每次新建：内部会递归调用本函数，共用一个 g 正则会互相踩 lastIndex
-	const pattern = new RegExp(EMPHASIS_SOURCE.source, 'g');
+	const pattern = new RegExp(INLINE_SOURCE.source, 'g');
 	let out = '';
 	let index = 0;
 	let match = pattern.exec(text);
 
 	while (match) {
 		out += escapeText(text.slice(index, match.index));
-		out += wrapEmphasis(match);
+		out += wrapMatch(match);
 		index = match.index + match[0].length;
 		match = pattern.exec(text);
 	}
 
 	return out + escapeText(text.slice(index));
+}
+
+/** autolink 的两种形态：`<scheme:…>` 与 `<邮箱>`。 */
+const AUTOLINK_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*$/;
+const AUTOLINK_EMAIL = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
+
+interface Autolink {
+	/** 写进 `href` 的目标（邮箱形态补 `mailto:`）。 */
+	href: string;
+	/** 显示文字（保持原串）。 */
+	label: string;
+	/** 跨越到 `>` 之后的下标。 */
+	end: number;
+}
+
+/**
+ * 读一个 `<` 开头的 autolink（`<https://x>` / `<a@b.com>`）；不是 autolink 返回 null。
+ *
+ * 只认**没有空白**的一整段 `<…>`：`a < b > c` 里的 `< b >` 含空格，仍按裸 `<` 转义。
+ * 邮箱形态按核心 / 通行实现写成 `mailto:` 目标，文字保持原串。
+ */
+function readAutolink(text: string, at: number): Autolink | null {
+	const close = text.indexOf('>', at + 1);
+	if (close < 0) return null;
+
+	const inner = text.slice(at + 1, close);
+	if (inner === '' || /\s/.test(inner)) return null;
+	if (AUTOLINK_SCHEME.test(inner)) return { href: inner, label: inner, end: close + 1 };
+	if (AUTOLINK_EMAIL.test(inner)) return { href: `mailto:${inner}`, label: inner, end: close + 1 };
+	return null;
 }

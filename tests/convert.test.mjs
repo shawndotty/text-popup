@@ -7,7 +7,8 @@
  * 有意固定下来的「反直觉但正是设计意图」的约定（改动前先读 `convert.ts` 文件头）：
  * - `<br>` 后面**不**跟源码换行：弹窗的富文本渲染走 MarkdownRenderer，软换行也会渲染成 `<br>`，
  *   跟一个换行会让原文一行变成两行。因此正文必须压在单行里。
- * - `[[笔记]]` / `[t](u)` / `$x$` **不**转换：留原文，弹窗里才能渲染成可点击链接与公式。
+ * - `[[笔记]]` / **相对链接** `[t](u)` / `$x$` **不**转换：留原文，弹窗里才能渲染成可点击链接与公式；
+ *   只有带 scheme 的**绝对 URL**（`[文字](https://…)`、`<https://…>`）转成真 `<a>`（编辑器 / 阅读视图 / 导出里一致可点）。
  *
  * 刻意没测：无。本文件只 import 纯函数模块，不需要 obsidian 桩。
  */
@@ -154,12 +155,66 @@ test('没有配对反引号时反引号当普通字符', () => {
 	eq(markdownToHtml('a ` b', 'div'), '<div>\na ` b\n</div>', 'a ` b');
 });
 
-test('链接、嵌入与行内公式有意保持原文（交给弹窗的 MarkdownRenderer）', () => {
+test('相对链接、嵌入与行内公式有意保持原文（交给弹窗的 MarkdownRenderer）', () => {
+	// 只转带 scheme 的绝对 URL；`[t](u)` 是相对引用，转成裸 <a> 会指向错误位置，所以仍留原文。
 	eq(
 		markdownToHtml('[[笔记]] [t](u) ![[img]] $x$', 'div'),
 		'<div>\n[[笔记]] [t](u) ![[img]] $x$\n</div>',
 		'链接与公式',
 	);
+});
+
+// —— 行内链接（绝对 URL） ——
+
+test('带 scheme 的绝对 URL 行内链接转成 a 标签', () => {
+	eq(
+		markdownToHtml('[链接](https://example.com)', 'div'),
+		'<div>\n<a href="https://example.com">链接</a>\n</div>',
+		'[链接](https://example.com)',
+	);
+	eq(body('见 [A](https://a.com) 与 **粗**'), '见 <a href="https://a.com">A</a> 与 <strong>粗</strong>', '链接与强调混排');
+	eq(body('[a](mailto:a@b.com)'), '<a href="mailto:a@b.com">a</a>', 'mailto');
+});
+
+test('链接与强调可以互相嵌套（递归处理，不被切断）', () => {
+	eq(body('[**粗**](https://a.com)'), '<a href="https://a.com"><strong>粗</strong></a>', '链接内强调');
+	eq(body('**[a](https://a.com)**'), '<strong><a href="https://a.com">a</a></strong>', '强调内链接');
+});
+
+test('href 里的 & 与引号被转义成实体', () => {
+	eq(body('[a](https://x/?q=1&b=2)'), '<a href="https://x/?q=1&amp;b=2">a</a>', '& 转义');
+	eq(body('[a](https://x/"y)'), '<a href="https://x/&quot;y">a</a>', '引号转义（否则会截断属性）');
+});
+
+test('相对链接、内链、嵌入与图片仍留原文（只转绝对 URL）', () => {
+	for (const input of [
+		'[t](u)',
+		'[链接](http)',
+		'[a](路径/x.md)',
+		'[a](#标题)',
+		'[[笔记]]',
+		'[[笔记|别名]]',
+		'![[img]]',
+		'$x$',
+		'![alt](https://x)',
+		'[a](https://a.com/b(c))',
+		'[a](https://a.com "标题")',
+	]) {
+		eq(body(input), input, input);
+	}
+});
+
+// —— autolink ——
+
+test('autolink 转成 a 标签（不再被当成裸 < 转义）', () => {
+	eq(body('<https://auto.link>'), '<a href="https://auto.link">https://auto.link</a>', '<https://auto.link>');
+	eq(body('<mailto:a@b.com>'), '<a href="mailto:a@b.com">mailto:a@b.com</a>', '<mailto:a@b.com>');
+	eq(body('<a@b.com>'), '<a href="mailto:a@b.com">a@b.com</a>', '<a@b.com>');
+});
+
+test('含空格的尖括号仍是裸 <，不是 autolink', () => {
+	eq(body('a < b > c'), 'a &lt; b > c', 'a < b > c');
+	eq(body('a < b'), 'a &lt; b', 'a < b');
 });
 
 // —— 反向还原 ——
@@ -204,10 +259,48 @@ test('首尾各一个换行被去掉（标签独占一行的那两个换行）',
 	eq(htmlToMarkdown('\na\n'), 'a', '\\na\\n');
 });
 
+// —— 反向：a 标签 ——
+
+test('a 标签还原成 Markdown 链接（href 三种引号写法都认）', () => {
+	eq(htmlToMarkdown('<a href="https://a.com">A</a>'), '[A](https://a.com)', '双引号');
+	eq(htmlToMarkdown("<a href='https://a.com'>A</a>"), '[A](https://a.com)', '单引号');
+	eq(htmlToMarkdown('<a href=https://a.com>A</a>'), '[A](https://a.com)', '裸值');
+});
+
+test('a 标签丢弃 href 之外的属性；href 里的实体被还原', () => {
+	eq(
+		htmlToMarkdown('<a class="x" href="https://a.com" target="_blank">A</a>'),
+		'[A](https://a.com)',
+		'丢弃 class / target',
+	);
+	eq(htmlToMarkdown('<a href="https://x/?q=1&amp;b=2">A</a>'), '[A](https://x/?q=1&b=2)', '&amp; 还原');
+	eq(htmlToMarkdown('<a href="https://x/&quot;y">A</a>'), '[A](https://x/"y)', '&quot; 还原');
+});
+
+test('a 标签文字走同一套行内还原', () => {
+	eq(htmlToMarkdown('<a href="https://a.com"><strong>A</strong></a>'), '[**A**](https://a.com)', '链接内强调');
+});
+
+test('无 href 或未配对的 a 标签原样保留', () => {
+	eq(htmlToMarkdown('<a>A</a>'), '<a>A</a>', '无 href');
+	eq(htmlToMarkdown('<a href="https://a.com">A'), '<a href="https://a.com">A', '缺配对闭标签');
+});
+
 // —— 往返 ——
 
 test('markdownToHtml → htmlToMarkdown 往返后回到原文', () => {
-	const cases = ['plain', 'a **b**', 'a\n\nb', '**粗** 与 `code`', 'a\nb\n\nc', '==高== ~~删~~'];
+	const cases = [
+		'plain',
+		'a **b**',
+		'a\n\nb',
+		'**粗** 与 `code`',
+		'a\nb\n\nc',
+		'==高== ~~删~~',
+		'[a](https://x)',
+		'见 [a](https://x) 与 **b**',
+		'[**a**](https://x)',
+		'[a](https://x/?q=1&b=2)',
+	];
 	for (const input of cases) {
 		const html = markdownToHtml(input, 'div');
 		assert.equal(htmlToMarkdown(innerOf(html)), input, `往返失败，输入: ${JSON.stringify(input)}`);
