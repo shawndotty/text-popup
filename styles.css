@@ -388,6 +388,10 @@
 	line-height: 1.35;
 }
 
+.mod-text-popup .text-popup-canvas-node-content .inline-embed > .markdown-embed-title, 
+.mod-text-popup .text-popup-canvas-node-content .inline-embed > .markdown-embed-content > .markdown-preview-view {
+	padding-left: 0;
+}
 /* 组：背景单独一层，自己带透明度 —— 直接给组盒写 opacity 会把 label 一起淡化（12% 下读不出来）。 */
 .mod-text-popup .text-popup-canvas-group {
 	position: absolute;
