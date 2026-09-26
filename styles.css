@@ -761,6 +761,7 @@
 
 /* Remove Link Underline */
 
+.mod-text-popup .text-popup-text a,
 .mod-text-popup .text-popup-text .external-link {
 	text-decoration: none;
 }
