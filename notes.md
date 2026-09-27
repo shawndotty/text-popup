@@ -1,1 +1,2 @@
-- optimize canvas style
+- add copy to image feature
+- add export to image feature
