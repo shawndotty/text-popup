@@ -565,3 +565,58 @@ test('locateOnClose：读写往返一致，同值重复写返回 false（不触�
 test('locateOnClose：只保存，不刷新图标、不重建定义', () => {
 	assert.deepEqual([...settingSideEffects('locateOnClose')], []);
 });
+
+// —— V129：导出图片的三项设置（方案 [[Plan-20260926-231702]] §4） ——
+
+test('导出三项默认 png / 0.92 / 2，老 data.json 无此键时自动补齐', () => {
+	assert.equal(DEFAULT_SETTINGS.exportImageFormat, 'png');
+	assert.equal(DEFAULT_SETTINGS.exportImageQuality, 0.92);
+	assert.equal(DEFAULT_SETTINGS.exportImageScale, 2);
+	const settings = normalizeSettings({ enabled: false });
+	assert.equal(settings.exportImageFormat, 'png', '格式补齐');
+	assert.equal(settings.exportImageQuality, 0.92, '质量补齐');
+	assert.equal(settings.exportImageScale, 2, '倍率补齐');
+});
+
+test('导出格式：jpg 被保留，其余值一律回落 png', () => {
+	assert.equal(normalizeSettings({ exportImageFormat: 'jpg' }).exportImageFormat, 'jpg');
+	assert.equal(normalizeSettings({ exportImageFormat: 'jpeg' }).exportImageFormat, 'png', 'jpeg 不是合法值');
+	assert.equal(normalizeSettings({ exportImageFormat: 42 }).exportImageFormat, 'png', '非字符串');
+});
+
+test('导出质量 / 倍率越界或非数字时回落（与字号同一条 clamp 口径）', () => {
+	assert.equal(normalizeSettings({ exportImageQuality: 0 }).exportImageQuality, 0.1, '质量下越界');
+	assert.equal(normalizeSettings({ exportImageQuality: 5 }).exportImageQuality, 1, '质量上越界');
+	assert.equal(normalizeSettings({ exportImageQuality: 'high' }).exportImageQuality, 0.92, '质量非数字');
+	assert.equal(normalizeSettings({ exportImageScale: 0.2 }).exportImageScale, 1, '倍率下越界');
+	assert.equal(normalizeSettings({ exportImageScale: 99 }).exportImageScale, 4, '倍率上越界');
+	assert.equal(normalizeSettings({ exportImageScale: '2x' }).exportImageScale, 2, '倍率非数字');
+});
+
+test('导出三项：读写往返一致，同值重复写返回 false（不触发保存）', () => {
+	const settings = normalizeSettings({});
+	assert.equal(readSettingValue(settings, 'exportImageFormat'), 'png', '播种默认值');
+	assert.equal(writeSettingValue(settings, 'exportImageFormat', 'jpg'), true, 'png → jpg 算改动');
+	assert.equal(settings.exportImageFormat, 'jpg');
+	assert.equal(writeSettingValue(settings, 'exportImageFormat', 'jpg'), false, '同值不算改动');
+	assert.equal(writeSettingValue(settings, 'exportImageFormat', 'webp'), true, '非法值归一化到 png，也算改动');
+	assert.equal(settings.exportImageFormat, 'png');
+
+	assert.equal(writeSettingValue(settings, 'exportImageQuality', 0.5), true);
+	assert.equal(settings.exportImageQuality, 0.5);
+	assert.equal(writeSettingValue(settings, 'exportImageQuality', 0.5), false, '同值不算改动');
+	assert.equal(writeSettingValue(settings, 'exportImageQuality', 9), true, '越界被夹到 1，算改动');
+	assert.equal(settings.exportImageQuality, 1);
+
+	assert.equal(writeSettingValue(settings, 'exportImageScale', 3), true);
+	assert.equal(settings.exportImageScale, 3);
+	assert.equal(writeSettingValue(settings, 'exportImageScale', 3), false, '同值不算改动');
+	assert.equal(writeSettingValue(settings, 'exportImageScale', 0), true, '越界被夹到 1，算改动');
+	assert.equal(settings.exportImageScale, 1);
+});
+
+test('导出三项都只保存，不刷新图标、不重建定义', () => {
+	assert.deepEqual([...settingSideEffects('exportImageFormat')], []);
+	assert.deepEqual([...settingSideEffects('exportImageQuality')], []);
+	assert.deepEqual([...settingSideEffects('exportImageScale')], []);
+});

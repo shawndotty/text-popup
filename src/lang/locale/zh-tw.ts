@@ -51,6 +51,15 @@ const zhTW: Partial<typeof en> = {
 	'Popup font size': '彈窗字型大小',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'彈窗內文字的預設字型大小，單位為像素。彈窗內還可以臨時調整。',
+	'Image export': '圖片匯出',
+	'Image format': '圖片格式',
+	'Choose the file format used when saving the popup as an image. Copying always uses PNG.':
+		'把彈窗儲存為圖片時使用的檔案格式。複製到剪貼簿時固定使用 PNG。',
+	'Image quality': '圖片品質',
+	'JPEG quality, from 0.1 to 1. Only applies to JPG.': 'JPEG 品質，0.1 到 1。僅對 JPG 生效。',
+	'Image scale': '匯出倍率',
+	'Resolution multiplier. 2 exports at twice the pixel size.':
+		'解析度倍數。2 表示以兩倍像素尺寸匯出。',
 	'On close': '關閉彈窗時',
 	'Locate the viewed block': '定位到正在瀏覽的區塊',
 	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
@@ -103,6 +112,18 @@ const zhTW: Partial<typeof en> = {
 	'Filter blocks': '過濾區塊',
 	'Type to filter, @ for type': '輸入內容過濾，@ 按類型',
 	Filtered: '已篩選',
+
+	// —— 匯出圖片（右鍵選單項目與提示）——
+	'Copy content as image': '複製內容為圖片',
+	'Export content as image': '匯出內容為圖片',
+	'Copy page as image': '複製頁面為圖片',
+	'Export page as image': '匯出頁面為圖片',
+	'Export image': '匯出圖片',
+	'Image copied to the clipboard': '圖片已複製到剪貼簿',
+	'Image saved to': '圖片已儲存到',
+	'Failed to export the image': '匯出圖片失敗',
+	'Nothing to export': '沒有可匯出的內容',
+	'Part of the content could not be exported': '部分內容未能匯出',
 
 	// —— 放大圖示的 aria-label ——
 	'Magnify': '放大顯示',

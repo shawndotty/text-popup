@@ -27,5 +27,8 @@
 		"obsidian": "^1.13.1",
 		"typescript": "^5.8.3",
 		"typescript-eslint": "^8.59.1"
+	},
+	"dependencies": {
+		"html-to-image": "^1.11.13"
 	}
 }

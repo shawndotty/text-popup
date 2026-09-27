@@ -1,6 +1,19 @@
 import { PluginSettingTab } from 'obsidian';
 import type { App, SettingDefinitionItem } from 'obsidian';
 import { isBlockLevelTag } from './blocks';
+import {
+	DEFAULT_EXPORT_QUALITY,
+	DEFAULT_EXPORT_SCALE,
+	EXPORT_QUALITY_MAX,
+	EXPORT_QUALITY_MIN,
+	EXPORT_QUALITY_STEP,
+	EXPORT_SCALE_MAX,
+	EXPORT_SCALE_MIN,
+	EXPORT_SCALE_STEP,
+	clampExportQuality,
+	clampExportScale,
+} from './export';
+import type { ExportFormat } from './export';
 import { t } from './lang/helpers';
 import type TextPopupPlugin from './main';
 import { notifyQuoteActionsChanged, refreshTextPopupActions } from './scanner';
@@ -37,6 +50,12 @@ export interface TextPopupSettings {
 	excalidrawImageFallback: boolean;
 	/** Excalidraw 同名图片的优先格式：SVG 矢量（推荐），PNG 回退。 */
 	excalidrawPreferredFormat: 'svg' | 'png';
+	/** 导出为图片时的格式；只作用于「下载」（复制到剪贴板恒为 PNG）。 */
+	exportImageFormat: ExportFormat;
+	/** JPG 的导出质量，0.1 ~ 1；PNG 忽略它。 */
+	exportImageQuality: number;
+	/** 导出倍率（分辨率倍数），1 ~ 4；复制与下载都生效。 */
+	exportImageScale: number;
 }
 
 /** 老 `data.json` 只有 `popupTag`（1.1.0 之前唯一的包裹标签），升级后它代表多行标签。 */
@@ -65,6 +84,9 @@ export const DEFAULT_SETTINGS: TextPopupSettings = {
 	multiLineTag: 'div',
 	excalidrawImageFallback: false,
 	excalidrawPreferredFormat: 'svg',
+	exportImageFormat: 'png',
+	exportImageQuality: DEFAULT_EXPORT_QUALITY,
+	exportImageScale: DEFAULT_EXPORT_SCALE,
 };
 
 /** 「跟随主题」时色块控件的备用色（`<input type=color>` 表示不了「没有颜色」）。 */
@@ -169,6 +191,9 @@ export function normalizeSettings(raw: unknown): TextPopupSettings {
 				: DEFAULT_SETTINGS.excalidrawImageFallback,
 		excalidrawPreferredFormat:
 			data.excalidrawPreferredFormat === 'png' ? 'png' : 'svg',
+		exportImageFormat: data.exportImageFormat === 'jpg' ? 'jpg' : 'png',
+		exportImageQuality: clampExportQuality(data.exportImageQuality),
+		exportImageScale: clampExportScale(data.exportImageScale),
 	};
 }
 
@@ -200,7 +225,10 @@ export type SettingKey =
 	| 'singleLineTag'
 	| 'multiLineTag'
 	| 'excalidrawImageFallback'
-	| 'excalidrawPreferredFormat';
+	| 'excalidrawPreferredFormat'
+	| 'exportImageFormat'
+	| 'exportImageQuality'
+	| 'exportImageScale';
 
 /** 改完某个键之后要跑的副作用 —— 单独一张表，防止「顺手多加一次全文档刷新」。 */
 export type SettingEffect = 'refreshActions' | 'quoteActions' | 'rebuildDefinitions';
@@ -324,6 +352,12 @@ export function writeSettingValue(
 			return assign(settings, 'excalidrawImageFallback', value === true);
 		case 'excalidrawPreferredFormat':
 			return assign(settings, 'excalidrawPreferredFormat', value === 'png' ? 'png' : 'svg');
+		case 'exportImageFormat':
+			return assign(settings, 'exportImageFormat', value === 'jpg' ? 'jpg' : 'png');
+		case 'exportImageQuality':
+			return assign(settings, 'exportImageQuality', clampExportQuality(value));
+		case 'exportImageScale':
+			return assign(settings, 'exportImageScale', clampExportScale(value));
 	}
 }
 
@@ -535,6 +569,49 @@ export class TextPopupSettingTab extends PluginSettingTab {
 							max: FONT_SIZE_MAX,
 							step: FONT_SIZE_STEP,
 							defaultValue: DEFAULT_SETTINGS.popupFontSize,
+						},
+					},
+				],
+			},
+			{
+				type: 'group',
+				heading: t('Image export'),
+				items: [
+					{
+						name: t('Image format'),
+						desc: t(
+							'Choose the file format used when saving the popup as an image. Copying always uses PNG.',
+						),
+						control: {
+							type: 'dropdown',
+							key: 'exportImageFormat',
+							options: { png: 'PNG', jpg: 'JPG' },
+						},
+					},
+					{
+						name: t('Image quality'),
+						desc: t('JPEG quality, from 0.1 to 1. Only applies to JPG.'),
+						// 只有 JPG 有「质量」这一说：PNG 是无损的，滑块在那儿是误导
+						visible: (): boolean => settings.exportImageFormat === 'jpg',
+						control: {
+							type: 'slider',
+							key: 'exportImageQuality',
+							min: EXPORT_QUALITY_MIN,
+							max: EXPORT_QUALITY_MAX,
+							step: EXPORT_QUALITY_STEP,
+							defaultValue: DEFAULT_SETTINGS.exportImageQuality,
+						},
+					},
+					{
+						name: t('Image scale'),
+						desc: t('Resolution multiplier. 2 exports at twice the pixel size.'),
+						control: {
+							type: 'slider',
+							key: 'exportImageScale',
+							min: EXPORT_SCALE_MIN,
+							max: EXPORT_SCALE_MAX,
+							step: EXPORT_SCALE_STEP,
+							defaultValue: DEFAULT_SETTINGS.exportImageScale,
 						},
 					},
 				],

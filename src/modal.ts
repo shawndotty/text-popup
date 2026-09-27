@@ -3,7 +3,9 @@ import {
 	Component,
 	MarkdownRenderer,
 	MarkdownView,
+	Menu,
 	Modal,
+	Notice,
 	Platform,
 	Scope,
 	setIcon,
@@ -22,6 +24,14 @@ import {
 	suggestionContext,
 } from './filter';
 import type { PopupEntry, PopupEntryType } from './filter';
+import type { CaptureResult, ExportScope } from './export';
+import {
+	buildExportFileName,
+	capturePopupImage,
+	capturePopupPage,
+	copyCanvasToClipboard,
+	saveCanvasToVault,
+} from './export';
 import { t } from './lang/helpers';
 import {
 	FONT_SIZE_MAX,
@@ -565,6 +575,8 @@ export class TextPopupModal extends Modal {
 	/** 过滤框本体：补全弹层的包含块（它是绝对定位的），也是弹层落点的坐标原点。 */
 	private filterEl: HTMLElement | null = null;
 	private controlsEl: HTMLElement | null = null;
+	/** 导出图片进行中：防重入（连点两次右键不会叠出两张图）。 */
+	private exporting = false;
 	/**
 	 * 过滤态压的那层 scope（惰性建，见 `ensureFilterScope`）。
 	 *
@@ -806,6 +818,10 @@ export class TextPopupModal extends Modal {
 		// passive: false 才能 preventDefault 掉 Electron 默认的整界面缩放（见 onWheel）
 		this.scrollEl.addEventListener('wheel', this.onWheel, { passive: false });
 		this.scrollEl.addEventListener('pointerdown', this.onPointerDown);
+		// 导出入口：桌面端走正文区右键（移动端没有右键，走控制条按钮，见 buildControls）
+		if (!Platform.isMobile) {
+			this.scrollEl.addEventListener('contextmenu', this.onContextMenu);
+		}
 		// 拖拽要在鼠标移出弹窗 / 移出窗口后继续收事件 → 移动与结束挂文档级。
 		// 不调 setPointerCapture：它是给「鼠标移出窗口后还要继续收事件」用的，而鼠标按住时
 		// 浏览器本来就会把事件继续投递给文档；且合成事件下它会抛 NotFoundError（见 Plan §3.4）。
@@ -842,6 +858,8 @@ export class TextPopupModal extends Modal {
 		// removeEventListener 不比较 passive，只比较 capture，所以解绑不用带配置对象
 		this.scrollEl.removeEventListener('wheel', this.onWheel);
 		this.scrollEl.removeEventListener('pointerdown', this.onPointerDown);
+		// 未注册时调用 removeEventListener 是安全的（移动端没注册），不用再判一次平台
+		this.scrollEl.removeEventListener('contextmenu', this.onContextMenu);
 		activeDocument.removeEventListener('pointermove', this.onPointerMove);
 		activeDocument.removeEventListener('pointerup', this.onPointerUp);
 		activeDocument.removeEventListener('pointercancel', this.onPointerCancel);
@@ -1550,27 +1568,167 @@ export class TextPopupModal extends Modal {
 		this.createControlButton(zoomGroupEl, 'zoom-in', t('Zoom in'), () => this.stepZoom(1));
 
 		this.createControlButton(controlsEl, 'rotate-ccw', t('Reset'), () => this.resetSize());
+		// 移动端没有右键，导出入口挂在控制条上（Discuss Q7 默认）。
+		// 已知限制：图片态 / Canvas 态下控制条整体被隐藏（styles.css:607-612），那些态暂无入口（Plan R4 / U1）。
+		if (Platform.isMobile) {
+			this.createControlButton(controlsEl, 'download', t('Export image'), (el) =>
+				this.showExportMenuAtButton(el),
+			);
+		}
 	}
 
 	private createControlButton(
 		parentEl: HTMLElement,
 		icon: string,
 		label: string,
-		onClick: () => void,
-	): void {
+		onClick: (buttonEl: HTMLElement) => void,
+	): HTMLElement {
 		const buttonEl = parentEl.createDiv({ cls: 'text-popup-control-button' });
 		buttonEl.setAttribute('role', 'button');
 		buttonEl.setAttribute('tabindex', '0');
 		buttonEl.setAttribute('aria-label', label);
 		setIcon(buttonEl, icon);
-		buttonEl.addEventListener('click', onClick);
+		buttonEl.addEventListener('click', () => onClick(buttonEl));
 		// 空格归平移（由 onKeyDown 在 capture 阶段收走），这里只认 Enter；`repeat` 一并忽略 ——
 		// 没有它时按住键的每一次自动重复都是一次完整的 onClick（字号 / 缩放一路变）。
 		buttonEl.addEventListener('keydown', (evt) => {
 			if (evt.key !== 'Enter' || evt.repeat) return;
 			evt.preventDefault();
-			onClick();
+			onClick(buttonEl);
 		});
+		return buttonEl;
+	}
+
+	/**
+	 * 正文区右键菜单（V129）。
+	 *
+	 * 监听只挂在 `.text-popup-content` 上，所以标题栏 / 控制条 / 过滤框区域不会出菜单。
+	 * 命中链接或图片时直接放行：那里是核心自己的右键行为（复制链接、在新标签打开…），
+	 * 插件不该顶掉它（Discuss Q9）。
+	 */
+	private onContextMenu = (evt: MouseEvent): void => {
+		const target = evt.target instanceof Element ? evt.target : null;
+		if (target?.closest('a, img, .internal-link, .external-link')) return;
+		evt.preventDefault(); // 压掉浏览器自己的菜单
+		evt.stopPropagation(); // 别让核心的菜单与本插件的同屏出现（Plan R5）
+		this.buildExportMenu().showAtMouseEvent(evt);
+	};
+
+	/**
+	 * 导出菜单四项：内容组（整块长图）─ 分隔线 ─ 页面组（屏幕这一屏），方案 [[Plan-20260927-074342]]。
+	 * 每次现建、用完不持有（避免长生命周期残留）；桌面右键与移动端控制条按钮共用这一份。
+	 */
+	private buildExportMenu(): Menu {
+		return new Menu()
+			.addItem((item) =>
+				item
+					.setTitle(t('Copy content as image'))
+					.setIcon('copy')
+					.onClick(() => void this.exportCurrentPage('copy', 'content')),
+			)
+			.addItem((item) =>
+				item
+					.setTitle(t('Export content as image'))
+					.setIcon('download')
+					.onClick(() => void this.exportCurrentPage('download', 'content')),
+			)
+			.addSeparator()
+			.addItem((item) =>
+				item
+					.setTitle(t('Copy page as image'))
+					.setIcon('copy')
+					.onClick(() => void this.exportCurrentPage('copy', 'page')),
+			)
+			.addItem((item) =>
+				item
+					.setTitle(t('Export page as image'))
+					.setIcon('download')
+					.onClick(() => void this.exportCurrentPage('download', 'page')),
+			);
+	}
+
+	/** 移动端：从按钮的位置弹出同一份菜单（那里没有鼠标事件可用）。 */
+	private showExportMenuAtButton(buttonEl: HTMLElement): void {
+		const rect = buttonEl.getBoundingClientRect();
+		this.buildExportMenu().showAtPosition({ x: rect.left + rect.width / 2, y: rect.top });
+	}
+
+	/**
+	 * 导出当前正文为图片（V129），按范围分两组：
+	 * - `content`：正文整块（`.text-popup-text`）→ 长图、四周 32px 留白。下面「目标是 `.text-popup-text`」
+	 *   这段说的就是它；
+	 * - `page`：屏幕上这一屏（`.text-popup-content`）→ 不加留白、取当前滚动位置，实现是
+	 *   「内容图 + 裁到页面盒」（方案 [[Plan-20260927-074342]] §2）。
+	 *
+	 * 两组都取 `.text-popup-text`：它是滚动容器里带 `margin: auto` 的 flex 项，`clientHeight` 就是
+	 * 内容全文高（内容长就出长图），标题栏 / 控制条 / 过滤框都不在它里面；视图缩放与平移由
+	 * `capturePopupImage` 压在克隆根节点上，出图恒为 1× 原始尺寸（Discuss Q2 默认）。
+	 */
+	private async exportCurrentPage(
+		mode: 'copy' | 'download',
+		scope: ExportScope,
+	): Promise<void> {
+		if (this.exporting) return;
+		const node = this.textEl;
+		if (!node) {
+			new Notice(t('Nothing to export'));
+			return;
+		}
+		this.exporting = true;
+		try {
+			const { canvas, partial } = await this.captureByScope(scope, node);
+			if (mode === 'copy') {
+				await copyCanvasToClipboard(canvas);
+				new Notice(t('Image copied to the clipboard'));
+			} else {
+				const format = this.settings.exportImageFormat;
+				const name = buildExportFileName(
+					this.source.sourceName,
+					format === 'jpg' ? 'jpg' : 'png',
+					new Date(),
+					scope,
+				);
+				const path = await saveCanvasToVault(this.app, canvas, name, {
+					format,
+					quality: this.settings.exportImageQuality,
+					sourcePath: this.source.sourcePath,
+				});
+				new Notice(`${t('Image saved to')} ${path}`);
+			}
+			// 「尽力而为」：图已经出来了，只是有已知拍不到的内容，补一条提示即可（Discuss Q6）
+			if (partial) new Notice(t('Part of the content could not be exported'));
+		} catch (error) {
+			console.error('[text-popup] 导出图片失败', error);
+			new Notice(t('Failed to export the image'));
+		} finally {
+			this.exporting = false;
+		}
+	}
+
+	/**
+	 * 按范围取一张图。两组共用倍率与底色（方案 §5：不新增设置项）；页面组额外需要页面盒
+	 * `scrollEl`——它缺失时按内容组兜底，宁可出一张长图也不报错。
+	 */
+	private async captureByScope(scope: ExportScope, textEl: HTMLElement): Promise<CaptureResult> {
+		const opts = {
+			scale: this.settings.exportImageScale,
+			backgroundColor: this.resolveExportBackground(),
+		};
+		if (scope === 'page' && this.scrollEl) {
+			return capturePopupPage(textEl, this.scrollEl, opts);
+		}
+		return capturePopupImage(textEl, opts);
+	}
+
+	/**
+	 * 出图的底色：设置里给了自定义背景就用它；「跟随主题」时读弹窗的实际计算背景色 ——
+	 * `getComputedStyle` 返回的是已解析成 `rgb()` 的值，主题怎么变都能跟住。
+	 */
+	private resolveExportBackground(): string {
+		if (this.settings.popupBackgroundColor) return this.settings.popupBackgroundColor;
+		const computed = activeWindow.getComputedStyle(this.modalEl).backgroundColor;
+		// 透明底色在 JPG 上会被压成黑块、在 PNG 上也不是「和弹窗看起来一样」，兜一层白底
+		return computed && !computed.startsWith('rgba(0, 0, 0, 0)') ? computed : '#ffffff';
 	}
 
 	private stepFontSize(direction: number): void {

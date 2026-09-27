@@ -50,6 +50,15 @@ const zhCN: Partial<typeof en> = {
 	'Popup font size': '弹窗字号',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'弹窗内文字的默认字号，单位为像素。弹窗内还可以临时调整。',
+	'Image export': '图片导出',
+	'Image format': '图片格式',
+	'Choose the file format used when saving the popup as an image. Copying always uses PNG.':
+		'把弹窗保存为图片时使用的文件格式。复制到剪贴板时固定使用 PNG。',
+	'Image quality': '图片质量',
+	'JPEG quality, from 0.1 to 1. Only applies to JPG.': 'JPEG 质量，0.1 到 1。仅对 JPG 生效。',
+	'Image scale': '导出倍率',
+	'Resolution multiplier. 2 exports at twice the pixel size.':
+		'分辨率倍数。2 表示以两倍像素尺寸导出。',
 	'On close': '关闭弹窗时',
 	'Locate the viewed block': '定位到正在浏览的块',
 	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
@@ -102,6 +111,18 @@ const zhCN: Partial<typeof en> = {
 	'Filter blocks': '过滤区块',
 	'Type to filter, @ for type': '输入内容过滤，@ 按类型',
 	Filtered: '已筛选',
+
+	// —— 导出图片（右键菜单项与提示）——
+	'Copy content as image': '复制内容为图片',
+	'Export content as image': '导出内容为图片',
+	'Copy page as image': '复制页面为图片',
+	'Export page as image': '导出页面为图片',
+	'Export image': '导出图片',
+	'Image copied to the clipboard': '图片已复制到剪贴板',
+	'Image saved to': '图片已保存到',
+	'Failed to export the image': '导出图片失败',
+	'Nothing to export': '没有可导出的内容',
+	'Part of the content could not be exported': '部分内容未能导出',
 
 	// —— 放大图标的 aria-label ——
 	'Magnify': '放大显示',

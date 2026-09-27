@@ -51,6 +51,16 @@ export default {
 	'Popup font size': 'Popup font size',
 	'Default font size inside the popup, in pixels. You can also adjust it inside the popup.':
 		'Default font size inside the popup, in pixels. You can also adjust it inside the popup.',
+	'Image export': 'Image export',
+	'Image format': 'Image format',
+	'Choose the file format used when saving the popup as an image. Copying always uses PNG.':
+		'Choose the file format used when saving the popup as an image. Copying always uses PNG.',
+	'Image quality': 'Image quality',
+	'JPEG quality, from 0.1 to 1. Only applies to JPG.':
+		'JPEG quality, from 0.1 to 1. Only applies to JPG.',
+	'Image scale': 'Image scale',
+	'Resolution multiplier. 2 exports at twice the pixel size.':
+		'Resolution multiplier. 2 exports at twice the pixel size.',
 	'On close': 'On close',
 	'Locate the viewed block': 'Locate the viewed block',
 	'When you close the popup, scroll the note to the block you were viewing. The cursor is not moved.':
@@ -104,6 +114,18 @@ export default {
 	'Filter blocks': 'Filter blocks',
 	'Type to filter, @ for type': 'Type to filter, @ for type',
 	Filtered: 'Filtered',
+
+	// —— 导出图片（右键菜单项与提示）——
+	'Copy content as image': 'Copy content as image',
+	'Export content as image': 'Export content as image',
+	'Copy page as image': 'Copy page as image',
+	'Export page as image': 'Export page as image',
+	'Export image': 'Export image',
+	'Image copied to the clipboard': 'Image copied to the clipboard',
+	'Image saved to': 'Image saved to',
+	'Failed to export the image': 'Failed to export the image',
+	'Nothing to export': 'Nothing to export',
+	'Part of the content could not be exported': 'Part of the content could not be exported',
 
 	// —— 放大图标的 aria-label ——
 	'Magnify': 'Magnify',
