@@ -9,6 +9,7 @@
  */
 
 import { setIcon } from 'obsidian';
+import type { App } from 'obsidian';
 import { isExcalidrawEmbed, resolveCanvasFile, resolveExcalidrawImage } from '../extract';
 import { t } from '../lang/helpers';
 import { TextPopupModal } from '../modal';
@@ -19,6 +20,7 @@ import {
 	ACTIONS_SELECTOR,
 	containingMarkdownView,
 	EMBED_ACTIONS_CLASS,
+	embeddedAnchor,
 	FLAIR_ACTION_CLASS,
 	TABLE_ACTIONS_CLASS,
 	type TextPopupHost,
@@ -158,6 +160,20 @@ export function qualifyEmbed(embedEl: HTMLElement): EmbedKind | null {
 }
 
 /**
+ * 相对链接的解析基准：优先所在 MarkdownView，其次所在内嵌编辑器；都没有才给空串（与旧行为一致）。
+ *
+ * 与 `session.ts` 的取值三级同源（见 `createTextPopupSource`）：漏掉内嵌编辑器这一层，任务卡片里的
+ * Canvas / Excalidraw 嵌入就会「候选集里有它、图标却没有」—— 命令入口翻得到、点图标却没有。
+ */
+function anchorPath(app: App, el: HTMLElement): string {
+	return (
+		containingMarkdownView(app, el)?.file?.path ??
+		embeddedAnchor(app, el)?.file?.path ??
+		''
+	);
+}
+
+/**
  * 现在该不该有图标 —— **必须与「候选集里有没有它」同源**，否则就是幽灵图标。
  *
  * 前三条守卫与 `injectImageAction` 同源，理由也一样（候选集里没有它，挂了就是点不开的死图标）：
@@ -182,8 +198,7 @@ export function canMagnifyEmbed(embedEl: HTMLElement, host: TextPopupHost, kind:
 	// `CanvasEmbed` 只是在同一个容器上加 `canvas-embed` 类。
 	const src = embedEl.getAttribute('src') ?? '';
 	if (kind === 'canvas') {
-		const sourcePath = containingMarkdownView(host.app, embedEl)?.file?.path ?? '';
-		return resolveCanvasFile(host.app, `![[${src}]]`, sourcePath) !== null;
+		return resolveCanvasFile(host.app, `![[${src}]]`, anchorPath(host.app, embedEl)) !== null;
 	}
 
 	// 以下只可能命中 excalidraw（EmbedKind 只有这两个取值）
@@ -192,7 +207,7 @@ export function canMagnifyEmbed(embedEl: HTMLElement, host: TextPopupHost, kind:
 		resolveExcalidrawImage(
 			host.app,
 			`![[${src}]]`,
-			containingMarkdownView(host.app, embedEl)?.file?.path ?? '',
+			anchorPath(host.app, embedEl),
 			host.settings.excalidrawPreferredFormat,
 		) !== null
 	);

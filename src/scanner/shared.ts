@@ -5,7 +5,7 @@
 import { MarkdownView } from 'obsidian';
 import type { BlockKind } from '../blocks';
 import type { Extension } from '@codemirror/state';
-import type { App, EventRef } from 'obsidian';
+import type { App, Editor, EventRef, MarkdownFileInfo, TFile } from 'obsidian';
 import type { TextPopupSettings } from '../settings';
 
 /**
@@ -167,4 +167,41 @@ export function containingMarkdownView(app: App, el: HTMLElement): MarkdownView 
 		if (view instanceof MarkdownView && view.containerEl.contains(el)) return view;
 	}
 	return null;
+}
+
+/** 认领到的内嵌编辑器：编辑器本体 + 它所属的文件 + 命中的宿主元素。 */
+export interface EmbeddedAnchor {
+	editor: Editor;
+	file: TFile | null;
+	/** 命中用的宿主元素，供调用方判重 / 调试。 */
+	containerEl: HTMLElement;
+}
+
+/**
+ * 内嵌编辑器（IOTO Task View 的卡片正文 / 放大态 / 续写区等，都是 TextFileView 子类）。
+ *
+ * 它们不在 `getLeavesOfType('markdown')` 里，`containingMarkdownView` 对它恒为 null ——
+ * 这就是「Task View 里点放大图标不弹窗」的直接原因（[[Research-20261031-061126]] §四·R3）。
+ * 唯一入口是 `workspace.activeEditor`：宿主在 focus / 挂载时把内嵌编辑器登记进去
+ * （ioto-tasks-center 的 `registerActiveEditor()`）。
+ *
+ * **必须做包含判定**。不做的话，活动编辑器可能是别的窗格的笔记，兜底会打开错的笔记 ——
+ * 这是 R3 的另一半，比「不弹窗」更难发现。优先用宿主自报的 `containerEl`（内嵌 controller
+ * 已补），缺失时退回 CM6 的 `editor.cm.dom`（核心 Editor 必有）；两者都取不到就当作不匹配。
+ *
+ * 与 `containingMarkdownView` 是「两条互斥的精确路径」，不是父子关系；这里**不**兜底到
+ * `getActiveViewOfType`（那是 session.ts 入口层的近似，见那边的注释）。
+ */
+export function embeddedAnchor(app: App, el: HTMLElement): EmbeddedAnchor | null {
+	// d.ts 的 `MarkdownFileInfo` 没有 `containerEl`，内嵌 controller 是在运行时多给的
+	const active = app.workspace.activeEditor as
+		| (MarkdownFileInfo & { containerEl?: HTMLElement })
+		| null;
+	const editor = active?.editor;
+	if (!editor) return null;
+	const hostEl =
+		active?.containerEl ??
+		(editor as unknown as { cm?: { dom?: HTMLElement } }).cm?.dom;
+	if (!hostEl?.contains(el)) return null;
+	return { editor, file: active?.file ?? null, containerEl: hostEl };
 }

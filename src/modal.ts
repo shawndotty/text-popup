@@ -501,6 +501,13 @@ export interface TextPopupSource {
 export class TextPopupModal extends Modal {
 	/** MarkdownRenderer 要求传入真实 Component，并在关闭时卸载，避免嵌入内容的事件监听泄漏。 */
 	private component = new Component();
+	/**
+	 * 打开前聚焦的元素，关窗时还给它（见 onClose 末尾）。
+	 *
+	 * 必须在**构造函数**里取：`Modal.open()` 在调 `onOpen` 之前就已经把焦点甩到 `body` 了
+	 * （实测），到 `onOpen` 里再取只会拿到 `body`。取到的通常是内嵌编辑器 / 笔记的 `.cm-content`。
+	 */
+	private readonly previousFocus: HTMLElement | null;
 	private fontSize: number;
 	private zoom = DEFAULT_ZOOM;
 	/** 当前显示的是候选里的第几条。 */
@@ -610,6 +617,10 @@ export class TextPopupModal extends Modal {
 		super(app);
 		this.fontSize = settings.popupFontSize;
 		this.index = startIndex;
+		// 用「有没有 focus 方法」判定而不是 `instanceof HTMLElement`：单测环境没有 DOM 类，
+		// 且跨窗口（pop-out）拿到的元素本来就未必是同一个 realm 的构造器。
+		const focused = activeDocument.activeElement as HTMLElement | null;
+		this.previousFocus = typeof focused?.focus === 'function' ? focused : null;
 	}
 
 	/**
@@ -758,6 +769,16 @@ export class TextPopupModal extends Modal {
 		this.modalEl.addClass('mod-text-popup');
 		this.updateTitle();
 
+		// 弹窗必须自己**接管焦点**，否则焦点会落回 `body`。
+		//
+		// 这不是无障碍洁癖，而是插件间的既有契约：IOTO Task View 的内嵌编辑器在 blur 后延后一帧看
+		// `document.activeElement`，落进 `.modal-container` 就当作「弹窗抢焦点」放行、不提交不销毁；
+		// 落在 `body` 则判定「用户点到别处」→ 提交并销毁编辑器。核心 lightbox 用的也是同一手法
+		// （`containerEl.tabIndex = -1` + `focus()`），这里照抄。缺了这一步，卡片编辑态里点放大图标
+		// 会「弹窗打开、卡片却退出编辑态」（[[Report-20261031-064222]] 实测）。
+		this.containerEl.tabIndex = -1;
+		this.containerEl.focus();
+
 		// 空字符串表示跟随主题：此时不设变量，交给 styles.css 的默认值。
 		const background = this.settings.popupBackgroundColor;
 		if (background) this.modalEl.style.setProperty('--text-popup-bg', background);
@@ -886,6 +907,22 @@ export class TextPopupModal extends Modal {
 		this.locateOnClose();
 		// 移除离屏宿主，不留游离节点
 		this.source.dispose?.();
+		this.restoreFocus();
+	}
+
+	/**
+	 * 关窗把焦点还给打开前的元素。
+	 *
+	 * 核心的 `Modal.open()` 会先把焦点甩到 `body`（见 `previousFocus` 的注释），关窗也不负责还回来；
+	 * 而本插件最常见的入口恰好是**内嵌编辑器里的放大图标**（IOTO Task View 卡片）：焦点回不去，
+	 * 用户就得多点一下才能继续打字。只还原「焦点确实还悬在 body 上」的情况 —— 关窗前用户已经点进
+	 * 别处（另一个窗格 / 输入框）时不能抢。
+	 */
+	private restoreFocus(): void {
+		const previous = this.previousFocus;
+		if (!previous?.isConnected) return;
+		if (activeDocument.activeElement !== activeDocument.body) return;
+		previous.focus();
 	}
 
 	/**

@@ -28,6 +28,7 @@ import { findSupportedElement } from '../tags';
 import {
 	BLOCK_SELECTOR,
 	containingMarkdownView,
+	embeddedAnchor,
 	hasContent,
 	isKindEnabled,
 	MEASURE_CLASS,
@@ -113,14 +114,21 @@ export function createTextPopupSource(
 	host: PopupSessionHost,
 	actionEl: HTMLElement,
 ): { source: TextPopupSource; startIndex: number } {
-	// 找不到按钮所属的窗格时退回活动视图：这是入口处可接受的近似（不再用 `document.body` 兜底 ——
-	// 那会把别的窗格 / 别的笔记里的块也算进候选集，是「数量可能超过本笔记块数」的入口）。
-	// 取 sourcePath 那类**解析基准**必须用 `containingMarkdownView` 的严格版，不能用这里的近似。
-	const view =
-		containingMarkdownView(host.app, actionEl) ??
-		host.app.workspace.getActiveViewOfType(MarkdownView);
-	const editor = view?.editor ?? null;
-	const file = view?.file ?? host.app.workspace.getActiveFile();
+	// 这里有三条取值路径，**精确度不同**，顺序不能换：
+	// 1. `containingMarkdownView`：按钮在真 Markdown 视图里 —— 最精确，先用它；
+	// 2. `embeddedAnchor`：内嵌编辑器（Task View 的卡片正文 / 放大态等 TextFileView 子类）
+	//    不在 `getLeavesOfType('markdown')` 里，只能从 `workspace.activeEditor` 认领，并且
+	//    必须确认点就在那个编辑器内（[[Research-20261031-061126]] §四·R3）；
+	// 3. `getActiveViewOfType(MarkdownView)`：**近似兜底**，只留给「不认识锚点」的场景
+	//    （悬停预览等）。内嵌命中后绝不能再走它 —— 那会用活动 MarkdownView 的正文覆盖掉
+	//    刚认领的内嵌编辑器，正是 R3 的另一半「弹窗打开了但内容/数量是别的笔记」。
+	// 取 sourcePath 那类**解析基准**另见 inject.ts 的 `anchorPath`（严格版，同样不兜底）。
+	const view = containingMarkdownView(host.app, actionEl);
+	const embedded = view ? null : embeddedAnchor(host.app, actionEl);
+	const fallback = view ?? (embedded ? null : host.app.workspace.getActiveViewOfType(MarkdownView));
+
+	const editor = view?.editor ?? embedded?.editor ?? fallback?.editor ?? null;
+	const file = view?.file ?? embedded?.file ?? fallback?.file ?? host.app.workspace.getActiveFile();
 
 	const { candidates, source } = buildPopupSession(
 		host,

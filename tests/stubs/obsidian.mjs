@@ -11,6 +11,13 @@ if (typeof globalThis.window === 'undefined') {
 	globalThis.window = globalThis;
 }
 
+// `activeDocument` 同理：核心把它装在全局上（不是模块导出）。这里只需「有 activeElement /
+// body 两个成员、当前没有焦点」，让 `TextPopupModal` 构造时读焦点那一步不抛错；
+// 不模拟焦点转移（关窗回焦的行为留给真机验收）。
+if (typeof globalThis.activeDocument === 'undefined') {
+	globalThis.activeDocument = { activeElement: null, body: null };
+}
+
 // 重导出**真实** moment：`lang/helpers.ts` 读 moment.locale() 选词典，
 // 用假 moment 会掩盖 zh-hant / zh-hk 这类真实语言变体的行为。
 import moment from 'moment';
