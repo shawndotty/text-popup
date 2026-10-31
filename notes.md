@@ -1,2 +1,1 @@
-- add copy to image feature
-- add export to image feature
+- support popup image in ioto task view
